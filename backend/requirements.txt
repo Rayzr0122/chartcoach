@@ -1,0 +1,37 @@
+# Web framework
+fastapi
+uvicorn[standard]
+
+# Database (MySQL)
+sqlalchemy
+alembic
+pymysql
+cryptography
+
+# Settings / environment variables
+pydantic-settings
+email-validator
+
+# Auth (password hashing + JWT tokens)
+bcrypt
+python-jose[cryptography]
+python-multipart
+
+# Rate limiting (stops brute-force attempts on login)
+slowapi
+
+# Face recognition (identity check)
+insightface
+onnxruntime
+# Pinned: opencv-python 5.x dropped the bundled haarcascade data files that DeepFace needs
+opencv-python==4.10.0.84
+numpy
+
+# Face liveness / anti-spoofing (blocks photo or video spoofing)
+deepface
+tf-keras
+torch
+torchvision
+
+# Real-time monitoring (websocket connection)
+websockets
