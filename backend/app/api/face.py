@@ -1,12 +1,13 @@
 # This file has the routes for saving and removing a user's face data.
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
 from app.api.deps import get_current_user
-from app.core.face_engine import debug_blink_sequence, get_single_face_embedding, is_live_face
+from app.core.face_engine import debug_blink_sequence, extract_embedding_with_liveness
 from app.database import get_db
-from app.models.face_embedding import FaceEmbedding
 from app.models.user import User
 from app.schemas.face import FaceEnrollIn, FaceEnrollOut, FaceFrameBurstIn
 
@@ -26,21 +27,24 @@ def debug_blink(data: FaceFrameBurstIn):
 def enroll_face(
     data: FaceEnrollIn,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Database = Depends(get_db),
 ):
-    # Check every photo fully before saving anything, so a bad photo
-    # rejects the whole enrollment instead of leaving a half-finished set.
-    # No blink is required here — see the note on FaceEnrollIn for why.
+    # Single-pass inference: each photo runs the ONNX model ONCE for both
+    # embedding extraction and liveness check (previously ran it twice).
     embeddings: list[list[float]] = []
 
     for image_base64 in data.images_base64:
-        try:
-            embedding = get_single_face_embedding(image_base64)
-        except ValueError as error:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
+        embedding, is_live, reason = extract_embedding_with_liveness(image_base64)
 
-        # Block photos, screens, and other spoofing attempts at enrollment time
-        if not is_live_face(image_base64):
+        if not embedding:
+            detail = (
+                "No face was detected. Please look directly at the camera."
+                if reason == "no_face"
+                else "Multiple faces detected. Only one person should be in view."
+            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+        if not is_live:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="One of the photos does not look like a live camera photo. Please try again.",
@@ -48,12 +52,13 @@ def enroll_face(
 
         embeddings.append(embedding)
 
-    # Replace any previous face samples with this fresh set
-    db.query(FaceEmbedding).filter(FaceEmbedding.user_id == current_user.id).delete()
-    for embedding in embeddings:
-        db.add(FaceEmbedding(user_id=current_user.id, vector=embedding))
-
-    db.commit()
+    # Replace any previous face samples with this fresh set in MongoDB
+    now = datetime.now(timezone.utc)
+    embedding_docs = [{"vector": emb, "created_at": now} for emb in embeddings]
+    db.users.update_one(
+        {"_id": current_user._id},
+        {"$set": {"face_embeddings": embedding_docs}},
+    )
 
     return FaceEnrollOut(
         message="Face enrolled successfully.",
@@ -65,9 +70,11 @@ def enroll_face(
 @router.delete("/enroll", response_model=FaceEnrollOut)
 def remove_face(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Database = Depends(get_db),
 ):
-    db.query(FaceEmbedding).filter(FaceEmbedding.user_id == current_user.id).delete()
-    db.commit()
+    db.users.update_one(
+        {"_id": current_user._id},
+        {"$set": {"face_embeddings": []}},
+    )
 
     return FaceEnrollOut(message="Face data removed.", has_face_enrolled=False)

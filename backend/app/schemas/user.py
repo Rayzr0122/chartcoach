@@ -21,7 +21,7 @@ class UserLogin(BaseModel):
 
 class UserOut(BaseModel):
     # Data we send back about a user (never includes the password)
-    id: int
+    id: str | int
     email: EmailStr
     full_name: str
     is_active: bool

@@ -27,6 +27,11 @@ export type Course = {
   progress?: number;
   isEnrolled?: boolean;
   featured?: boolean;
+  instructor: {
+    name: string;
+    role: string;
+    avatarBg: string;
+  };
   description: string;
   learnings: string[];
   modules: CourseModule[];

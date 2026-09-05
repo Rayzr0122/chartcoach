@@ -13,6 +13,7 @@ type FaceOnboardingWizardProps = {
 export default function FaceOnboardingWizard({ user, onRefreshUser, onDismiss }: FaceOnboardingWizardProps) {
   const [step, setStep] = useState<"intro" | "scan" | "success">("intro");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [enrollSuccess, setEnrollSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleCapture(samples: string[][]) {
@@ -21,9 +22,12 @@ export default function FaceOnboardingWizard({ user, onRefreshUser, onDismiss }:
     try {
       const photos = samples.map((s) => s[0]);
       await enrollFace(photos);
+      setEnrollSuccess(true);
+      await new Promise((r) => setTimeout(r, 900));
       await onRefreshUser();
       setStep("success");
     } catch (err) {
+      setEnrollSuccess(false);
       setError(err instanceof ApiError ? err.message : "Face scan could not be processed. Please try again with good lighting.");
     } finally {
       setIsSubmitting(false);
@@ -141,6 +145,8 @@ export default function FaceOnboardingWizard({ user, onRefreshUser, onDismiss }:
           <FaceCapture
             onCapture={handleCapture}
             isBusy={isSubmitting}
+            isSuccess={enrollSuccess}
+            successMessage="All Angles Enrolled ✓"
             sampleCount={3}
             requireBlink={false}
             errorMessage={error}

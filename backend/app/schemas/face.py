@@ -13,7 +13,7 @@ class FaceImageIn(BaseModel):
 class FaceFrameBurstIn(BaseModel):
     # A short burst of frames spanning a real blink, with no identity
     # attached. Used only by the debug-blink diagnostic tool.
-    images_base64: list[str] = Field(min_length=3, max_length=12)
+    images_base64: list[str] = Field(min_length=3, max_length=24)
 
 
 class FaceLoginIn(BaseModel):
@@ -28,7 +28,7 @@ class FaceLoginIn(BaseModel):
     # confirm liveness itself instead of trusting the browser's claim.
     # Login is the real security boundary, so this is the one place a
     # live blink is required.
-    images_base64: list[str] = Field(min_length=3, max_length=12)
+    images_base64: list[str] = Field(min_length=3, max_length=24)
 
 
 class FaceEnrollIn(BaseModel):

@@ -12,10 +12,13 @@ from app.api import auth, face, monitor, users
 from app.config import settings
 from app.core.face_engine import load_face_app
 from app.core.rate_limit import limiter
+from app.database import init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure database indexes
+    init_db()
     # Load the face recognition model once, when the server starts,
     # so the first user request does not have to wait for it.
     load_face_app()

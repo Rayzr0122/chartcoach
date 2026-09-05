@@ -1,4 +1,9 @@
 // This file has small helper functions for using the browser webcam.
+//
+// Performance optimizations:
+// - Monitor frames captured at 320×240 (not full webcam resolution)
+// - WebP @ quality 0.6 for ~4x smaller payloads vs default JPEG
+// - Reusable canvas to avoid per-frame DOM allocation
 
 // Turns on the camera and returns the raw video stream
 export async function startCamera(): Promise<MediaStream> {
@@ -13,12 +18,31 @@ export function stopCamera(stream: MediaStream | null) {
   stream?.getTracks().forEach((track) => track.stop());
 }
 
+// ── Reusable canvases (avoid creating new DOM elements every frame) ──
+
+let _captureCanvas: HTMLCanvasElement | null = null;
+let _monitorCanvas: HTMLCanvasElement | null = null;
+
+function getCaptureCanvas(): HTMLCanvasElement {
+  if (!_captureCanvas) {
+    _captureCanvas = document.createElement("canvas");
+  }
+  return _captureCanvas;
+}
+
+function getMonitorCanvas(): HTMLCanvasElement {
+  if (!_monitorCanvas) {
+    _monitorCanvas = document.createElement("canvas");
+  }
+  return _monitorCanvas;
+}
+
 // Takes a snapshot of the current video frame and returns it as base64 JPEG text.
 // This is what gets sent to the backend for face recognition.
 export function captureFrame(video: HTMLVideoElement): string | null {
   if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
-  const canvas = document.createElement("canvas");
+  const canvas = getCaptureCanvas();
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
 
@@ -30,6 +54,31 @@ export function captureFrame(video: HTMLVideoElement): string | null {
   // "image/jpeg" keeps the file small, which matters since we send this often
   const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
   return dataUrl.split(",")[1]; // strip the "data:image/jpeg;base64," prefix
+}
+
+// Captures a downscaled, WebP-encoded frame optimized for monitoring.
+// 320×240 @ WebP q=0.6 is ~5-10KB vs ~200KB for full-res JPEG.
+// This is specifically for the continuous face monitor, not enrollment.
+const MONITOR_WIDTH = 320;
+const MONITOR_HEIGHT = 240;
+
+export function captureMonitorFrame(video: HTMLVideoElement): string | null {
+  if (video.videoWidth === 0 || video.videoHeight === 0) return null;
+
+  const canvas = getMonitorCanvas();
+  canvas.width = MONITOR_WIDTH;
+  canvas.height = MONITOR_HEIGHT;
+
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+
+  // Downscale from webcam resolution to 320×240
+  context.drawImage(video, 0, 0, MONITOR_WIDTH, MONITOR_HEIGHT);
+
+  // WebP at quality 0.6 produces much smaller payloads than JPEG at 0.85
+  // Browser support for WebP toDataURL is universal in modern browsers
+  const dataUrl = canvas.toDataURL("image/webp", 0.6);
+  return dataUrl.split(",")[1];
 }
 
 // Measures how bright the current video frame is, from 0 (black) to 255 (white).

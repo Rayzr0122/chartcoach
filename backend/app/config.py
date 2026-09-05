@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # Database connection string
     database_url: str
+    database_name: str = "chartcoach"
 
     # Secret key used to sign login tokens (JWT)
     jwt_secret_key: str

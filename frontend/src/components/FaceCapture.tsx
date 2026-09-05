@@ -6,14 +6,16 @@ import { startCamera, stopCamera, captureFrame, getFrameBrightness } from "@/lib
 type FaceCaptureProps = {
   onCapture: (samples: string[][]) => void;
   isBusy?: boolean;
+  isSuccess?: boolean;
+  successMessage?: string | null;
   sampleCount?: number;
   requireBlink?: boolean;
   errorMessage?: string | null;
   onClearError?: () => void;
 };
 
-const BURST_DURATION_MS = 800;
-const BURST_STEP_MS = 100;
+const BURST_DURATION_MS = 1800;
+const BURST_STEP_MS = 120;
 const LOW_LIGHT_THRESHOLD = 45;
 const HIGH_LIGHT_THRESHOLD = 225;
 const BRIGHTNESS_CHECK_INTERVAL_MS = 400;
@@ -21,6 +23,8 @@ const BRIGHTNESS_CHECK_INTERVAL_MS = 400;
 export default function FaceCapture({
   onCapture,
   isBusy = false,
+  isSuccess = false,
+  successMessage = null,
   sampleCount = 1,
   requireBlink = true,
   errorMessage = null,
@@ -32,8 +36,13 @@ export default function FaceCapture({
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [lightingStatus, setLightingStatus] = useState<"low" | "high" | "optimal">("optimal");
   const [isCapturing, setIsCapturing] = useState(false);
+  const [captureProgress, setCaptureProgress] = useState(0);
   const [capturedSamples, setCapturedSamples] = useState<string[][]>([]);
   const [captureError, setCaptureError] = useState<string | null>(null);
+
+  // Local success flash for multi-sample steps
+  const [showLocalSuccess, setShowLocalSuccess] = useState(false);
+  const [localSuccessText, setLocalSuccessText] = useState<string | null>(null);
 
   // Auto-expiring error animation state (resets back after 3s)
   const [showErrorAnimation, setShowErrorAnimation] = useState(false);
@@ -132,15 +141,18 @@ export default function FaceCapture({
 
     if (requireBlink) {
       setIsCapturing(true);
+      setCaptureProgress(0);
       const totalSteps = Math.round(BURST_DURATION_MS / BURST_STEP_MS);
       for (let i = 0; i < totalSteps; i++) {
         const frame = captureFrame(video);
         if (frame) {
           frames.push(frame);
         }
+        setCaptureProgress(Math.round(((i + 1) / totalSteps) * 100));
         await new Promise((r) => setTimeout(r, BURST_STEP_MS));
       }
       setIsCapturing(false);
+      setCaptureProgress(0);
     } else {
       const frame = captureFrame(video);
       if (frame) frames.push(frame);
@@ -160,10 +172,19 @@ export default function FaceCapture({
       capturedSamplesRef.current = [];
       setCapturedSamples([]);
       onCapture(updated);
+    } else {
+      setLocalSuccessText(`Angle ${updated.length} of ${sampleCount} Saved`);
+      setShowLocalSuccess(true);
+      setTimeout(() => {
+        setShowLocalSuccess(false);
+        setLocalSuccessText(null);
+      }, 900);
     }
   }
 
   const isScanning = isCapturing || isBusy;
+  const isSuccessActive = isSuccess || showLocalSuccess;
+  const activeSuccessText = successMessage || localSuccessText || "Identity Verified";
   const currentSampleNumber = Math.min(capturedSamples.length + 1, sampleCount);
 
   // Generate 48 circular tick marks for the biometric ring
@@ -173,10 +194,12 @@ export default function FaceCapture({
     <div className="flex flex-col items-center gap-4 w-full">
       {/* ─── Circular Biometric Viewport ─── */}
       <div className="relative flex items-center justify-center p-3">
-        {/* Outer Glowing Gradient Ring (Red on error, Blue/Green when normal) */}
+        {/* Outer Glowing Gradient Ring (Emerald on success, Red on error, Blue/Green when normal) */}
         <div
           className={`absolute inset-0 rounded-full p-[2.5px] pointer-events-none transition-all duration-500 ${
-            showErrorAnimation && !isScanning
+            isSuccessActive
+              ? "scale-105 shadow-[0_0_40px_rgba(16,185,129,0.55)]"
+              : showErrorAnimation && !isScanning
               ? "scale-105 shadow-[0_0_35px_rgba(239,68,68,0.5)] animate-shake"
               : isScanning
               ? "scale-105 shadow-[0_0_30px_rgba(13,110,253,0.35)]"
@@ -184,7 +207,9 @@ export default function FaceCapture({
           }`}
           style={{
             background:
-              showErrorAnimation && !isScanning
+              isSuccessActive
+                ? "linear-gradient(135deg, #10b981 0%, #06b6d4 50%, #3b82f6 100%)"
+                : showErrorAnimation && !isScanning
                 ? "linear-gradient(135deg, #f43f5e 0%, #ef4444 50%, #dc2626 100%)"
                 : "linear-gradient(135deg, #0d6efd 0%, #06b6d4 50%, #10b981 100%)",
           }}
@@ -195,7 +220,13 @@ export default function FaceCapture({
         {/* Circular Camera Viewport Container */}
         <div
           className={`biometric-circular-frame ${
-            showErrorAnimation && !isScanning ? "has-error animate-shake" : isScanning ? "scanning" : ""
+            isSuccessActive
+              ? "has-success"
+              : showErrorAnimation && !isScanning
+              ? "has-error animate-shake"
+              : isScanning
+              ? "scanning"
+              : ""
           } relative w-[275px] h-[275px] sm:w-[290px] sm:h-[290px] rounded-full overflow-hidden flex items-center justify-center`}
         >
           {/* Video Element is ALWAYS mounted so srcObject is never lost */}
@@ -269,8 +300,13 @@ export default function FaceCapture({
                     const x2 = 100 + r2 * Math.cos(rad);
                     const y2 = 100 + r2 * Math.sin(rad);
                     const isLeft = x1 < 100;
-                    const tickStroke =
-                      showErrorAnimation && !isScanning ? "#ef4444" : isLeft ? "#0d6efd" : "#10b981";
+                    const tickStroke = isSuccessActive
+                      ? "#10b981"
+                      : showErrorAnimation && !isScanning
+                      ? "#ef4444"
+                      : isLeft
+                      ? "#0d6efd"
+                      : "#10b981";
                     return (
                       <line
                         key={i}
@@ -288,11 +324,11 @@ export default function FaceCapture({
                 </svg>
               </div>
 
-              {/* 4 Biometric Corner Target Brackets (Turns Red on error) */}
-              <div className={`bio-target-bracket tl ${showErrorAnimation && !isScanning ? "error-bracket" : ""}`} />
-              <div className={`bio-target-bracket bl ${showErrorAnimation && !isScanning ? "error-bracket" : ""}`} />
-              <div className={`bio-target-bracket tr ${showErrorAnimation && !isScanning ? "error-bracket" : ""}`} />
-              <div className={`bio-target-bracket br ${showErrorAnimation && !isScanning ? "error-bracket" : ""}`} />
+              {/* 4 Biometric Corner Target Brackets (Green on success, Red on error) */}
+              <div className={`bio-target-bracket tl ${isSuccessActive ? "success-bracket" : showErrorAnimation && !isScanning ? "error-bracket" : ""}`} />
+              <div className={`bio-target-bracket bl ${isSuccessActive ? "success-bracket" : showErrorAnimation && !isScanning ? "error-bracket" : ""}`} />
+              <div className={`bio-target-bracket tr ${isSuccessActive ? "success-bracket" : showErrorAnimation && !isScanning ? "error-bracket" : ""}`} />
+              <div className={`bio-target-bracket br ${isSuccessActive ? "success-bracket" : showErrorAnimation && !isScanning ? "error-bracket" : ""}`} />
 
               {/* Smooth Bottom Vignette Fade */}
               <div
@@ -303,7 +339,7 @@ export default function FaceCapture({
               />
 
               {/* ─── Apple-Grade Red Error Cross & Fade-in Blur Overlay ─── */}
-              {showErrorAnimation && !isScanning && (
+              {showErrorAnimation && !isScanning && !isSuccessActive && (
                 <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/45 backdrop-blur-[3px] transition-all duration-300 animate-fadeIn">
                   <div className="w-16 h-16 rounded-full bg-rose-500/20 border-2 border-rose-500 flex items-center justify-center shadow-[0_0_30px_rgba(244,63,94,0.7)] animate-spring-pop">
                     <svg
@@ -324,6 +360,32 @@ export default function FaceCapture({
                   </span>
                 </div>
               )}
+
+              {/* ─── Apple-Grade Green Success Checkmark & Pulse Overlay ─── */}
+              {isSuccessActive && !isScanning && (
+                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/45 backdrop-blur-[4px] transition-all duration-300 animate-fadeIn">
+                  {/* Expanding ripple pulse behind checkmark */}
+                  <div className="absolute w-24 h-24 rounded-full bg-emerald-500/25 animate-ripple pointer-events-none" />
+
+                  {/* Spring-popped checkmark circle */}
+                  <div className="relative w-16 h-16 rounded-full bg-emerald-500/25 border-2 border-emerald-400 flex items-center justify-center shadow-[0_0_35px_rgba(16,185,129,0.7)] animate-spring-pop">
+                    <svg
+                      className="w-8 h-8 text-emerald-400"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={3}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="20 6 9 17 4 12" className="animate-checkmark" />
+                    </svg>
+                  </div>
+                  <span className="text-[12px] font-bold text-emerald-200 mt-2.5 tracking-wide drop-shadow animate-fade-up">
+                    {activeSuccessText}
+                  </span>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -333,7 +395,9 @@ export default function FaceCapture({
       <div className="w-full max-w-[340px] flex justify-center">
         <div
           className={`flex items-center gap-2.5 px-5 py-2.5 rounded-full border backdrop-blur-md shadow-md transition-all duration-300 ${
-            showErrorAnimation && !isScanning
+            isSuccessActive
+              ? "bg-emerald-50/95 border-emerald-300 text-emerald-900 shadow-emerald-500/15 animate-spring-pop"
+              : showErrorAnimation && !isScanning
               ? "bg-rose-50/95 border-rose-200 text-rose-800 shadow-rose-500/10 animate-shake"
               : lightingStatus === "low" && !isScanning
               ? "bg-amber-50/95 border-amber-200 text-amber-900"
@@ -345,7 +409,13 @@ export default function FaceCapture({
           }`}
         >
           {/* Icon */}
-          {isBusy ? (
+          {isSuccessActive ? (
+            <div className="w-4 h-4 rounded-full bg-emerald-500 flex items-center justify-center text-white shrink-0 shadow-sm animate-spring-pop">
+              <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3.5} strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </div>
+          ) : isBusy ? (
             <svg className="w-4 h-4 animate-spin text-emerald-600 shrink-0" viewBox="0 0 24 24" fill="none">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -388,10 +458,12 @@ export default function FaceCapture({
 
           {/* Real-time Status Text */}
           <span className="text-xs font-semibold tracking-tight text-center">
-            {isBusy
+            {isSuccessActive
+              ? activeSuccessText
+              : isBusy
               ? "Authenticating biometrics…"
               : isCapturing
-              ? "Scanning… Please hold still and blink"
+              ? `Scanning… Please blink naturally (${captureProgress}%)`
               : showErrorAnimation && displayedError
               ? displayedError
               : lightingStatus === "low"
@@ -423,13 +495,24 @@ export default function FaceCapture({
           <button
             type="button"
             onClick={handleCapture}
-            disabled={isScanning || !isCameraActive}
-            className="chartcoach-btn-primary !py-2.5 !rounded-xl text-sm shadow-md"
+            disabled={isScanning || isSuccessActive || !isCameraActive}
+            className={`!py-2.5 !rounded-xl text-sm shadow-md transition-all ${
+              isSuccessActive
+                ? "bg-emerald-600 hover:bg-emerald-600 text-white cursor-default shadow-emerald-500/20"
+                : "chartcoach-btn-primary"
+            }`}
           >
-            {isBusy ? (
+            {isSuccessActive ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="w-4 h-4 text-white animate-spring-pop" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                <span>Verified</span>
+              </span>
+            ) : isBusy ? (
               <span>Authenticating…</span>
             ) : isCapturing ? (
-              <span>Scanning…</span>
+              <span>Scanning… ({captureProgress}%)</span>
             ) : (
               <>
                 <svg

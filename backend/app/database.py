@@ -1,25 +1,33 @@
-# This file sets up the connection to the MySQL database.
+# This file sets up the connection to the MongoDB database.
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+import pymongo
+from pymongo.database import Database
 
 from app.config import settings
 
-# Engine talks to the MySQL database
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+# MongoClient connection to MongoDB
+client: pymongo.MongoClient = pymongo.MongoClient(
+    settings.database_url,
+    serverSelectionTimeoutMS=5000,
+)
 
-# Each request gets its own database session
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# All models (tables) will inherit from this Base class
-Base = declarative_base()
+# Active database instance
+db: Database = client[settings.database_name]
 
 
-def get_db():
-    # This function gives a database session to a request,
-    # and always closes it when the request is done.
-    db = SessionLocal()
+def init_db() -> None:
+    # Ensure indexes exist in MongoDB collections
     try:
-        yield db
-    finally:
-        db.close()
+        db.users.create_index("email", unique=True)
+    except Exception as exc:
+        print(f"Warning ensuring MongoDB indexes: {exc}")
+
+
+def get_db() -> Database:
+    # FastAPI dependency yielding database handle
+    return db
+
+
+# Backward-compatible factory for contexts (e.g. websockets) that previously used SessionLocal
+def SessionLocal() -> Database:
+    return db

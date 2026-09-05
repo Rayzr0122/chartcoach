@@ -3,7 +3,7 @@
 
 from fastapi import Cookie, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
 from app.core.security import AUTH_COOKIE_NAME, decode_access_token
 from app.database import get_db
@@ -18,7 +18,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 def get_current_user(
     token_from_header: str | None = Depends(oauth2_scheme),
     token_from_cookie: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
-    db: Session = Depends(get_db),
+    db: Database = Depends(get_db),
 ) -> User:
     # This runs on every protected route. The browser app authenticates via
     # the httpOnly cookie; an Authorization header still works too, for
@@ -37,7 +37,8 @@ def get_current_user(
     if email is None:
         raise credentials_error
 
-    user = db.query(User).filter(User.email == email).first()
+    user_doc = db.users.find_one({"email": email})
+    user = User.from_doc(user_doc)
     if user is None or not user.is_active:
         raise credentials_error
 

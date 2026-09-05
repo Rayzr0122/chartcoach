@@ -11,7 +11,7 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
 export type User = {
-  id: number;
+  id: number | string;
   email: string;
   full_name: string;
   is_active: boolean;

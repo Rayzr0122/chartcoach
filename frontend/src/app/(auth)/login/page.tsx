@@ -19,6 +19,7 @@ function LoginForm() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [useFaceLogin, setUseFaceLogin] = useState(false);
   const [faceStep, setFaceStep] = useState<"email" | "scan">("email");
+  const [faceLoginSuccess, setFaceLoginSuccess] = useState(false);
   const [dismissRegistered, setDismissRegistered] = useState(false);
   const [shakeKey, setShakeKey] = useState(0);
 
@@ -35,9 +36,12 @@ function LoginForm() {
     setIsSubmitting(true);
     try {
       await faceLogin(email.trim(), samples[0]);
+      setFaceLoginSuccess(true);
+      await new Promise((r) => setTimeout(r, 1100));
       await login();
       router.push("/dashboard");
     } catch (error) {
+      setFaceLoginSuccess(false);
       triggerError(error instanceof ApiError ? error.message : "Face not recognized. Please ensure your face is enrolled.");
     } finally {
       setIsSubmitting(false);
@@ -215,6 +219,8 @@ function LoginForm() {
               <FaceCapture
                 onCapture={handleFaceLogin}
                 isBusy={isSubmitting}
+                isSuccess={faceLoginSuccess}
+                successMessage="Face Verified • Welcome Back"
                 errorMessage={errorMessage}
                 onClearError={() => setErrorMessage(null)}
               />

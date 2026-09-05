@@ -1,14 +1,25 @@
 # This file has the WebSocket route that keeps watching the camera
 # after login, to make sure the same person is still there.
+#
+# Optimizations applied:
+# - Single-pass inference: detect + embed + liveness in one call (was 2x)
+# - Pre-built numpy gallery matrix at connection time (avoids per-frame allocation)
+# - No redundant base64 decoding
 
 import time
 
+import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
-from app.core.face_engine import best_similarity, get_faces, is_live_face, is_match
+from app.core.face_engine import (
+    best_similarity_from_matrix,
+    decode_base64_image,
+    extract_faces_from_decoded,
+    is_live_face_from_obj,
+    is_match,
+)
 from app.core.security import AUTH_COOKIE_NAME, decode_access_token
 from app.database import SessionLocal
-from app.models.face_embedding import FaceEmbedding
 from app.models.user import User
 
 router = APIRouter(tags=["monitor"])
@@ -41,20 +52,20 @@ async def monitor_session(websocket: WebSocket):
 
     # Load the user's saved face fingerprint before accepting the connection
     db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.email == email).first()
-        if user is None or not user.is_active:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User not found.")
-            return
+    user_doc = db.users.find_one({"email": email})
+    user = User.from_doc(user_doc)
+    if user is None or not user.is_active:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User not found.")
+        return
 
-        face_rows = db.query(FaceEmbedding).filter(FaceEmbedding.user_id == user.id).all()
-        if not face_rows:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="No enrolled face for this user.")
-            return
+    stored_embeddings = [row.vector for row in user.face_embeddings]
+    if not stored_embeddings:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="No enrolled face for this user.")
+        return
 
-        stored_embeddings = [row.vector for row in face_rows]
-    finally:
-        db.close()
+    # Pre-build the numpy gallery matrix ONCE at connection time.
+    # This avoids creating new numpy arrays on every incoming frame.
+    gallery_matrix = np.array(stored_embeddings, dtype=np.float32)
 
     await websocket.accept()
 
@@ -75,8 +86,10 @@ async def monitor_session(websocket: WebSocket):
                 continue
             last_processed_at = now
 
+            # Single-pass: decode once, run model once, extract everything we need
             try:
-                faces = get_faces(image_base64)
+                image = decode_base64_image(image_base64)
+                faces = extract_faces_from_decoded(image)
             except ValueError:
                 faces = []
 
@@ -90,13 +103,16 @@ async def monitor_session(websocket: WebSocket):
                 reason = "multiple_faces"
                 bad_streak += 1
                 good_streak = 0
-            elif not is_live_face(image_base64):
-                # Someone is holding up a photo or a screen instead of being there in person
+            elif not is_live_face_from_obj(faces[0]):
+                # Liveness check from the already-computed Face object (no re-inference)
                 reason = "spoof_detected"
                 bad_streak += 1
                 good_streak = 0
             else:
-                similarity = best_similarity(faces[0].normed_embedding.tolist(), stored_embeddings)
+                # Embedding comparison against pre-built gallery matrix
+                similarity = best_similarity_from_matrix(
+                    faces[0].normed_embedding.tolist(), gallery_matrix
+                )
                 if is_match(similarity):
                     reason = "ok"
                     good_streak += 1

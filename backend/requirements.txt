@@ -2,11 +2,11 @@
 fastapi
 uvicorn[standard]
 
-# Database (MySQL)
-sqlalchemy
-alembic
+# Database (MongoDB)
+pymongo[srv]>=4.17.0
+dnspython>=2.8.0
+# Optional: pymysql kept for running scripts/migrate_mysql_to_mongo.py
 pymysql
-cryptography
 
 # Settings / environment variables
 pydantic-settings
@@ -26,12 +26,6 @@ onnxruntime
 # Pinned: opencv-python 5.x dropped the bundled haarcascade data files that DeepFace needs
 opencv-python==4.10.0.84
 numpy
-
-# Face liveness / anti-spoofing (blocks photo or video spoofing)
-deepface
-tf-keras
-torch
-torchvision
 
 # Real-time monitoring (websocket connection)
 websockets
