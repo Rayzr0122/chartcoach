@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     # plain http://, but this MUST be True in any real deployment.
     cookie_secure: bool = False
 
+    # Mux signing is optional so unrelated APIs can start without video credentials.
+    mux_signing_key_id: str | None = None
+    mux_signing_private_key_base64: str | None = None
+    mux_playback_token_expire_minutes: int = 120
+    mux_playback_restriction_id: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

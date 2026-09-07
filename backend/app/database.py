@@ -47,6 +47,35 @@ def init_db() -> None:
         db.ai_messages.create_index([("conversation_id", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)])
         db.notifications.create_index([("user_id", pymongo.ASCENDING), ("read_at", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
         db.session_registrations.create_index([("session_id", pymongo.ASCENDING), ("user_id", pymongo.ASCENDING)], unique=True)
+        db.courses.create_index("slug", unique=True, name="course_slug_unique")
+        db.lessons.create_index("id", unique=True, name="lesson_id_unique")
+        db.lessons.create_index(
+            [("course_id", pymongo.ASCENDING), ("published", pymongo.ASCENDING)],
+            name="lesson_course_published",
+        )
+        db.enrollments.create_index(
+            [("user_id", pymongo.ASCENDING), ("course_id", pymongo.ASCENDING)],
+            unique=True,
+            name="user_course_unique",
+        )
+        db.enrollments.create_index(
+            [("email", pymongo.ASCENDING), ("course_id", pymongo.ASCENDING), ("active", pymongo.ASCENDING)],
+            name="enrollment_email_course_active",
+        )
+        db.lesson_progress.create_index(
+            [("user_id", pymongo.ASCENDING), ("lesson_id", pymongo.ASCENDING)],
+            unique=True,
+            name="user_lesson_unique",
+        )
+        db.prompt_attempts.create_index(
+            [
+                ("user_id", pymongo.ASCENDING),
+                ("lesson_id", pymongo.ASCENDING),
+                ("prompt_id", pymongo.ASCENDING),
+                ("attempted_at", pymongo.DESCENDING),
+            ],
+            name="attempts_user_lesson_prompt",
+        )
     except Exception as exc:
         print(f"Warning ensuring MongoDB indexes: {exc}")
 
