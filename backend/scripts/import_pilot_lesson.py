@@ -131,20 +131,21 @@ def upsert_pilot_lesson(
     if enrollment_email:
         normalized_email = enrollment_email.strip().lower()
         user_doc = db.users.find_one({"email": normalized_email})
-        user_id = str(user_doc["_id"]) if user_doc else f"email:{normalized_email}"
-        result = db.enrollments.update_one(
-            {"user_id": user_id, "course_id": COURSE_ID},
-            {
-                "$set": {
-                    "email": normalized_email,
-                    "active": True,
-                    "updated_at": now,
+        if user_doc:
+            user_id = str(user_doc["_id"])
+            result = db.enrollments.update_one(
+                {"user_id": user_id, "course_id": COURSE_ID},
+                {
+                    "$set": {
+                        "email": normalized_email,
+                        "active": True,
+                        "updated_at": now,
+                    },
+                    "$setOnInsert": {"enrolled_at": now},
                 },
-                "$setOnInsert": {"enrolled_at": now},
-            },
-            upsert=True,
-        )
-        enrollment_count = 1 if result.acknowledged else 0
+                upsert=True,
+            )
+            enrollment_count = 1 if result.acknowledged else 0
     return {"courses": 1, "lessons": 1, "enrollments": enrollment_count}
 
 

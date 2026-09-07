@@ -95,6 +95,28 @@ def test_get_lesson_requires_published_course_lesson_and_active_enrollment(servi
         service.get_lesson("l1", user)
 
 
+def test_email_only_enrollment_cannot_authorize_but_matching_user_id_can(service_context):
+    db, user, service = service_context
+    db.enrollments.replace_one(
+        {"course_id": "price-action-secrets"},
+        {
+            "user_id": "another-user",
+            "email": user.email,
+            "course_id": "price-action-secrets",
+            "active": True,
+        },
+    )
+
+    with pytest.raises(EnrollmentRequired):
+        service.get_lesson("l1", user)
+
+    db.enrollments.update_one(
+        {"course_id": "price-action-secrets"},
+        {"$set": {"user_id": user.id, "email": "stale@example.test"}},
+    )
+    assert service.get_lesson("l1", user)["id"] == "l1"
+
+
 def test_playback_rotates_session_and_returns_resume_and_pending_state(service_context):
     db, user, service = service_context
     db.lesson_progress.insert_one(
@@ -130,6 +152,25 @@ def test_progress_rejects_missing_or_rotated_session(service_context):
     with pytest.raises(PlaybackSessionMismatch):
         service.update_progress("l1", user, "rotated", 5, [0, 5])
     assert playback["playback_session_id"] != "rotated"
+
+
+def test_progress_write_rejects_session_rotated_after_read(service_context, monkeypatch):
+    db, user, service = service_context
+    session_id = service.start_playback("l1", user)["playback_session_id"]
+    real_replace = db.lesson_progress.replace_one
+
+    def rotate_then_replace(query, replacement, upsert=False):
+        db.lesson_progress.update_one(
+            {"user_id": user.id, "lesson_id": "l1"},
+            {"$set": {"playback_session_id": "newer-session"}},
+        )
+        return real_replace(query, replacement, upsert=upsert)
+
+    monkeypatch.setattr(db.lesson_progress, "replace_one", rotate_then_replace)
+
+    with pytest.raises(PlaybackSessionMismatch):
+        service.update_progress("l1", user, session_id, 10, [0, 10])
+    assert db.lesson_progress.find_one({"user_id": user.id})["playback_session_id"] == "newer-session"
 
 
 def test_progress_merges_intervals_and_enforces_next_prompt_gate(service_context):
@@ -174,6 +215,27 @@ def test_prompt_attempt_requires_boundary_and_valid_option(service_context):
     service.update_progress("l1", user, session_id, 40, [25, 40])
     with pytest.raises(ProgressError, match="option_id"):
         service.attempt_prompt("l1", "p1", user, session_id, "missing")
+
+
+def test_prompt_write_rejects_session_rotated_after_read(service_context, monkeypatch):
+    db, user, service = service_context
+    session_id = service.start_playback("l1", user)["playback_session_id"]
+    service.update_progress("l1", user, session_id, 40, [25, 40])
+    real_replace = db.lesson_progress.replace_one
+
+    def rotate_then_replace(query, replacement, upsert=False):
+        db.lesson_progress.update_one(
+            {"user_id": user.id, "lesson_id": "l1"},
+            {"$set": {"playback_session_id": "newer-session"}},
+        )
+        return real_replace(query, replacement, upsert=upsert)
+
+    monkeypatch.setattr(db.lesson_progress, "replace_one", rotate_then_replace)
+
+    with pytest.raises(PlaybackSessionMismatch):
+        service.attempt_prompt("l1", "p1", user, session_id, "a")
+    assert db.lesson_progress.find_one({"user_id": user.id})["playback_session_id"] == "newer-session"
+    assert db.prompt_attempts.count_documents({"user_id": user.id, "lesson_id": "l1"}) == 0
 
 
 def test_progress_completes_only_after_coverage_and_required_prompt_pass(service_context):
