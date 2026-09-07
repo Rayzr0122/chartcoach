@@ -1,0 +1,357 @@
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 24px;
+  position: relative;
+  color: #edf3f6;
+  align-items: start;
+  font-family: Arial, sans-serif;
+}
+.player {
+  background: #111c2b;
+  border: 1px solid #324251;
+  border-radius: 20px;
+  overflow: hidden;
+}
+.brand {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 22px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: #b4c5d4;
+}
+.brand span:first-child {
+  font-size: 19px;
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  color: #f7fafa;
+}
+.screen {
+  background: #070c13;
+  aspect-ratio: 16/9;
+  position: relative;
+}
+.screen video {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  font-size: 14px;
+  color: #c2d6e2;
+  pointer-events: none;
+}
+.controls {
+  padding: 20px;
+}
+.buttons {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.workspace button {
+  cursor: pointer;
+  border: 1px solid #45596b;
+  border-radius: 8px;
+  background: #1b2b3b;
+  color: #f4f8fa;
+  min-height: 44px;
+  padding: 9px 13px;
+  font-size: 13px;
+}
+.workspace button:hover {
+  background: #2d4558;
+}
+.workspace button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.workspace :focus-visible {
+  outline: 3px solid #71e0c6;
+  outline-offset: 3px;
+}
+.workspace button[aria-pressed="true"] {
+  background: #246452;
+}
+.buttons input {
+  width: 72px;
+  accent-color: #56cbb1;
+}
+.clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  margin-right: auto;
+}
+.timeline {
+  position: relative;
+  margin: 0 0 18px;
+}
+.timeline > input {
+  width: 100%;
+  height: 7px;
+  appearance: none;
+  border-radius: 5px;
+  cursor: pointer;
+  accent-color: #56cbb1;
+}
+.markers {
+  height: 20px;
+  position: relative;
+}
+.markers button {
+  position: absolute;
+  transform: translateX(-30%);
+  background: transparent;
+  border: 0;
+  min-height: 22px;
+  padding: 0 5px;
+  font-size: 13px;
+  color: #bed2df;
+}
+.promptMarker {
+  position: absolute;
+  top: -11px;
+  color: #e9ba67;
+  font-size: 12px;
+  pointer-events: none;
+}
+.markers button[aria-current="true"] {
+  color: #71e0c6;
+  background: #254536;
+}
+.preview {
+  position: absolute;
+  bottom: 38px;
+  left: 0;
+  display: flex;
+  gap: 12px;
+  background: #f1f6f4;
+  color: #1b3040;
+  padding: 12px;
+  max-width: 340px;
+  box-shadow: 0 10px 30px #0008;
+  border-radius: 10px;
+  z-index: 2;
+}
+.preview img {
+  width: 110px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+.preview strong,
+.preview small {
+  display: block;
+}
+.preview p {
+  font-size: 12px;
+  margin: 5px 0;
+}
+.hint {
+  font-size: 10px;
+  color: #a7b6c5;
+  margin: 14px 0 0;
+}
+.chapters {
+  padding: 24px 20px;
+  background: #f7f8f4;
+  color: #203343;
+  border-radius: 18px;
+}
+.eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  margin: 0 0 8px;
+  color: #476b65;
+}
+.chapters h2 {
+  font-size: 23px;
+  margin: 0 0 24px;
+  letter-spacing: -0.03em;
+}
+.chapters ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.chapters button {
+  display: flex;
+  text-align: left;
+  width: 100%;
+  gap: 12px;
+  padding: 12px;
+  background: transparent;
+  border: 1px solid #dbe3df;
+  color: #203343;
+}
+.chapters button:hover,
+.chapters button[aria-current="true"] {
+  background: #dfeee7;
+  border-color: #649d89;
+}
+.chapters img {
+  width: 58px;
+  height: 54px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.chapters strong,
+.chapters small,
+.chapters button span span {
+  display: block;
+}
+.chapters strong {
+  font-size: 13px;
+  margin: 5px 0;
+}
+.chapters small {
+  font-size: 10px;
+  color: #476b65;
+}
+.chapters button span span {
+  font-size: 11px;
+  line-height: 1.5;
+  margin-bottom: 7px;
+}
+.progress {
+  border-top: 1px solid #d4dfd8;
+  padding-top: 18px;
+  margin: 24px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.error {
+  padding: 16px;
+  background: #4b2d2e;
+  font-size: 14px;
+}
+.error button {
+  margin-left: 10px;
+}
+.expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #091421;
+  padding: 24px;
+  overflow: auto;
+  align-content: center;
+}
+.workspace:fullscreen {
+  background: #091421;
+  padding: 24px;
+  overflow: auto;
+}
+.dialogShade {
+  position: absolute;
+  inset: 0;
+  background: #091320dc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  border-radius: 18px;
+  padding: 24px;
+}
+.dialog {
+  width: 100%;
+  max-width: 500px;
+  max-height: 100%;
+  overflow: auto;
+  background: #f8faf5;
+  color: #18323c;
+  border-radius: 18px;
+  padding: 32px;
+  box-shadow: 0 20px 80px #0005;
+}
+.dialog h2 {
+  font-size: 25px;
+  line-height: 1.25;
+  letter-spacing: -0.035em;
+  margin: 12px 0;
+}
+.dialog p {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.options {
+  display: grid;
+  gap: 10px;
+  margin: 24px 0;
+}
+.options button {
+  background: white;
+  color: #18323c;
+  border-color: #baccc3;
+  text-align: left;
+}
+.options button:hover {
+  background: #e3f1ea;
+}
+.feedback {
+  background: #e4efe6;
+  border-radius: 8px;
+  padding: 12px;
+}
+.dialog > button {
+  background: #185c4d;
+}
+.dialog .eyebrow {
+  font-size: 10px;
+}
+@media (max-width: 1000px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  .chapters ol {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dialogShade {
+    position: fixed;
+    border-radius: 0;
+  }
+}
+@media (max-width: 560px) {
+  .brand {
+    padding: 14px;
+    font-size: 8px;
+  }
+  .controls {
+    padding: 14px;
+  }
+  .buttons {
+    gap: 6px;
+  }
+  .buttons input {
+    width: 55px;
+  }
+  .buttons button {
+    font-size: 11px;
+    padding: 8px;
+  }
+  .chapters ol {
+    grid-template-columns: 1fr;
+  }
+  .expanded {
+    padding: 10px;
+    align-content: start;
+  }
+  .dialog {
+    padding: 22px;
+  }
+  .hint {
+    line-height: 1.6;
+  }
+  .clock {
+    font-size: 11px;
+  }
+}
