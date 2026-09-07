@@ -1,9 +1,13 @@
-from types import SimpleNamespace
+import base64
+import json
 
 import mongomock
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from jose import jwt
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -14,6 +18,7 @@ from app.core.security import AUTH_COOKIE_NAME, create_access_token
 from app.database import get_db, init_db
 from app.domain.learning import Lesson
 from app.services.learning import LearningService
+from app.services.mux import MuxPlaybackSigner
 
 
 class StaticSigner:
@@ -124,6 +129,22 @@ def test_init_db_creates_learning_unique_and_query_indexes(monkeypatch):
     assert "attempts_user_lesson_prompt" in db.prompt_attempts.index_information()
 
 
+def test_init_db_continues_creating_unrelated_indexes_after_one_failure(monkeypatch, capsys):
+    db = mongomock.MongoClient().chartcoach
+    monkeypatch.setattr("app.database.db", db)
+
+    def fail_course_index(*args, **kwargs):
+        raise RuntimeError("simulated course index failure")
+
+    monkeypatch.setattr(db.courses, "create_index", fail_course_index)
+
+    init_db()
+
+    assert "user_lesson_unique" in db.lesson_progress.index_information()
+    assert "attempts_user_lesson_prompt" in db.prompt_attempts.index_information()
+    assert "simulated course index failure" in capsys.readouterr().out
+
+
 def test_get_lesson_authentication_and_enrollment_statuses(api_context):
     db, _, client, header = api_context
 
@@ -205,3 +226,58 @@ def test_playback_returns_controlled_503_when_mux_signing_is_unconfigured(api_co
     assert response.status_code == 503
     assert response.json()["detail"] == "Secure video playback is temporarily unavailable."
     assert db.lesson_progress.count_documents({}) == 0
+
+
+def test_playback_route_returns_complete_signed_mux_contract_without_user_pii(api_context):
+    db, app, client, header = api_context
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    signer = MuxPlaybackSigner(
+        key_id="ephemeral-test-key",
+        private_key_base64=base64.b64encode(private_pem).decode("ascii"),
+        expire_minutes=120,
+    )
+    app.dependency_overrides[learning.get_learning_service] = lambda: LearningService(db, signer)
+
+    response = client.post("/learning/lessons/l1/playback", headers=header)
+
+    assert response.status_code == 200
+    payload = response.json()
+    expected_keys = {
+        "playback_id",
+        "manifest_url",
+        "widevine_license_url",
+        "playready_license_url",
+        "fairplay_license_url",
+        "fairplay_certificate_url",
+        "playback_token",
+        "drm_token",
+        "expires_at",
+        "playback_session_id",
+        "resume_position_seconds",
+        "pending_prompt_id",
+    }
+    assert expected_keys <= payload.keys()
+    assert payload["manifest_url"].startswith("https://stream.mux.com/mux-playback-1.m3u8?token=")
+    assert payload["widevine_license_url"].startswith("https://license.mux.com/license/widevine/")
+    assert payload["playready_license_url"].startswith("https://license.mux.com/license/playready/")
+    assert payload["fairplay_license_url"].startswith("https://license.mux.com/license/fairplay/")
+    assert payload["fairplay_certificate_url"].startswith("https://license.mux.com/appcert/fairplay/")
+
+    playback_claims = jwt.decode(payload["playback_token"], public_pem, algorithms=["RS256"], audience="v")
+    drm_claims = jwt.decode(payload["drm_token"], public_pem, algorithms=["RS256"], audience="d")
+    assert playback_claims["sub"] == drm_claims["sub"] == "mux-playback-1"
+    assert playback_claims["exp"] == drm_claims["exp"]
+    claims_json = json.dumps([playback_claims, drm_claims])
+    assert "learner@example.test" not in claims_json
+    assert "Learner" not in claims_json
+    assert "email" not in playback_claims
+    assert "name" not in playback_claims

@@ -35,3 +35,18 @@ def test_pilot_import_is_idempotent_and_derives_three_safe_segments():
     assert sum(segment.required_prompt is not None for segment in lesson.segments) >= 2
     assert lesson.segments[-1].end_seconds == lesson.duration_seconds
     assert lesson.captions.language == "en"
+
+
+def test_pilot_import_skips_enrollment_when_requested_user_does_not_exist():
+    db = mongomock.MongoClient().chartcoach
+
+    result = upsert_pilot_lesson(
+        db,
+        mux_playback_id="mux-first",
+        duration_seconds=900,
+        caption_url="https://captions.example.test/l1.vtt",
+        enrollment_email="unknown@example.test",
+    )
+
+    assert result["enrollments"] == 0
+    assert db.enrollments.count_documents({}) == 0

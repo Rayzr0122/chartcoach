@@ -44,15 +44,13 @@ class LearningService:
         if not self.db.courses.find_one({"id": lesson.course_id, "published": True}):
             raise LessonNotFound("Lesson was not found")
 
-        identity_filters = [{"email": user.email}]
-        if self._user_id(user):
-            identity_filters.append({"user_id": self._user_id(user)})
-        enrollment = self.db.enrollments.find_one(
-            {
-                "course_id": lesson.course_id,
-                "active": True,
-                "$or": identity_filters,
-            }
+        user_id = self._user_id(user)
+        enrollment = (
+            self.db.enrollments.find_one(
+                {"user_id": user_id, "course_id": lesson.course_id, "active": True}
+            )
+            if user_id
+            else None
         )
         if not enrollment:
             raise EnrollmentRequired("An active enrollment is required")
@@ -115,12 +113,20 @@ class LearningService:
             completed_at=stored.get("completed_at"),
         )
 
-    def _persist_progress(self, progress: dict[str, Any]) -> None:
-        self.db.lesson_progress.replace_one(
-            {"user_id": progress["user_id"], "lesson_id": progress["lesson_id"]},
-            progress,
-            upsert=True,
-        )
+    def _persist_progress(
+        self,
+        progress: dict[str, Any],
+        *,
+        expected_session_id: str | None = None,
+    ) -> None:
+        query = {"user_id": progress["user_id"], "lesson_id": progress["lesson_id"]}
+        if expected_session_id is None:
+            self.db.lesson_progress.replace_one(query, progress, upsert=True)
+            return
+        query["playback_session_id"] = expected_session_id
+        result = self.db.lesson_progress.replace_one(query, progress, upsert=False)
+        if result.matched_count == 0:
+            raise PlaybackSessionMismatch("Playback session is missing or has been rotated")
 
     def get_lesson(self, lesson_id: str, user: Any) -> dict[str, Any]:
         lesson = self._load_authorized_lesson(lesson_id, user)
@@ -174,7 +180,7 @@ class LearningService:
             watched_intervals=[*stored.get("watched_intervals", []), interval],
             playback_session_id=playback_session_id,
         )
-        self._persist_progress(progress)
+        self._persist_progress(progress, expected_session_id=playback_session_id)
         return progress
 
     def attempt_prompt(
@@ -203,6 +209,17 @@ class LearningService:
             raise ProgressError("option_id must belong to the prompt")
 
         is_correct = option_id == prompt.correct_option_id
+        passed = list(stored.get("passed_prompt_ids", []))
+        if is_correct and prompt.id not in passed:
+            passed.append(prompt.id)
+        progress = self._normalized_progress(
+            lesson,
+            user,
+            stored,
+            passed_prompt_ids=passed,
+            playback_session_id=playback_session_id,
+        )
+        self._persist_progress(progress, expected_session_id=playback_session_id)
         attempted_at = datetime.now(timezone.utc)
         self.db.prompt_attempts.insert_one(
             {
@@ -218,17 +235,6 @@ class LearningService:
                 "attempted_at": attempted_at,
             }
         )
-        passed = list(stored.get("passed_prompt_ids", []))
-        if is_correct and prompt.id not in passed:
-            passed.append(prompt.id)
-        progress = self._normalized_progress(
-            lesson,
-            user,
-            stored,
-            passed_prompt_ids=passed,
-            playback_session_id=playback_session_id,
-        )
-        self._persist_progress(progress)
         return {
             "is_correct": is_correct,
             "explanation": prompt.explanation,
