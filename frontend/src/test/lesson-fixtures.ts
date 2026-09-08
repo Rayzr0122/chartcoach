@@ -83,6 +83,7 @@ export class FakePlayer implements PlayerAdapter {
     ended: false,
     buffering: false,
     volume: 1,
+    playbackRate: 1,
     muted: false,
     captionsAvailable: true,
     captionsEnabled: false,
@@ -125,6 +126,7 @@ export class FakePlayer implements PlayerAdapter {
   setVolume(volume: number) {
     this.emit("volumechange", { volume });
   }
+  setPlaybackRate(playbackRate: number) { this.emit("ratechange", { playbackRate }); }
   setMuted(muted: boolean) {
     this.emit("volumechange", { muted });
   }

@@ -2,6 +2,7 @@
 # It creates the app, sets up CORS, and connects all the routes.
 
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -57,9 +58,18 @@ app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 # CORS lets the Next.js frontend (a different port) call this API from the browser
+allowed_frontend_origins = [settings.frontend_origin.rstrip("/")]
+configured_origin = urlsplit(settings.frontend_origin)
+if configured_origin.hostname in {"localhost", "127.0.0.1"}:
+    port = f":{configured_origin.port}" if configured_origin.port else ""
+    for hostname in ("localhost", "127.0.0.1"):
+        origin = f"{configured_origin.scheme}://{hostname}{port}"
+        if origin not in allowed_frontend_origins:
+            allowed_frontend_origins.append(origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
+    allow_origins=allowed_frontend_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

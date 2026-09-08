@@ -17,6 +17,40 @@ import {
 } from "@/test/lesson-fixtures";
 import type { ProgressObservation, PromptAttempt } from "@/lib/learning-api";
 afterEach(() => vi.useRealTimers());
+it("changes playback speed without changing the playback position", async () => {
+  const { player } = setup();
+  const speed = await screen.findByRole("combobox", { name: "Playback speed" });
+  await waitFor(() => expect(speed).toBeEnabled());
+  const position = player.snapshot().position;
+  fireEvent.change(speed, { target: { value: "2" } });
+  expect(player.snapshot().playbackRate).toBe(2);
+  expect(player.snapshot().position).toBe(position);
+  fireEvent.change(speed, { target: { value: "0.5" } });
+  expect(player.snapshot().playbackRate).toBe(0.5);
+});
+it("shows three non-blocking reminders before the focused pause warning", async () => {
+  const { player } = setup({ passed_prompt_ids: ["q1"] });
+  const play = await screen.findByRole("button", { name: "Play" });
+  await waitFor(() => expect(play).toBeEnabled());
+  await userEvent.click(play);
+  expect(player.snapshot().paused).toBe(false);
+  const timeline = screen.getByRole("slider", { name: "Playback position" });
+  for (let reminder = 1; reminder <= 3; reminder++) {
+    fireEvent.change(timeline, { target: { value: "35" } });
+    expect(screen.getByRole("status", { name: "Skip reminder" })).toHaveTextContent(`Reminder ${reminder} of 3`);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(player.snapshot().paused).toBe(false);
+    fireEvent.change(timeline, { target: { value: "0" } });
+  }
+  fireEvent.change(timeline, { target: { value: "35" } });
+  const dialog = await screen.findByRole("alertdialog");
+  const resume = within(dialog).getByRole("button", { name: "Continue watching" });
+  expect(resume).toHaveFocus();
+  expect(player.snapshot().paused).toBe(true);
+  await userEvent.click(resume);
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+  expect(player.snapshot().paused).toBe(false);
+});
 function setup(
   overrides: Partial<typeof progress> = {},
   source: Partial<typeof authorization> = {},
@@ -273,7 +307,7 @@ it("refreshes authorization once then stops on another authorization error", asy
     t.player.emit("error", {}, error);
   });
   expect(t.authorizations()).toBe(1);
-  expect(screen.getByRole("alert")).toHaveTextContent(/retry/i);
+  expect(within(screen.getByRole("region", { name: "Lesson video" })).getByRole("alert")).toHaveTextContent(/retry/i);
 });
 it("does not credit a native jump as watched coverage", async () => {
   const t = setup();
@@ -294,7 +328,7 @@ it("restores authoritative position after server rejection", async () => {
   };
   await act(async () => t.player.emit("seeking", { position: 40 }));
   expect(t.player.state.position).toBe(0);
-  expect(screen.getByRole("alert")).toHaveTextContent(/refreshed/i);
+  expect(within(screen.getByRole("region", { name: "Lesson video" })).getByRole("alert")).toHaveTextContent(/refreshed/i);
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 it("keeps recovery reachable when a server error restores a pending prompt", async () => {
