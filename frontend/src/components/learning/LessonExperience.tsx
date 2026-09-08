@@ -56,11 +56,11 @@ export default function LessonExperience({
     };
   }, [lessonId, api, user, isLoading, retry]);
   return (
-    <main className="min-h-screen bg-[#0b1623] px-4 py-8 sm:px-8 sm:py-12 text-slate-100">
+    <main className="min-h-screen bg-[#f8fafc] px-4 py-8 sm:px-8 sm:py-12 text-slate-900">
       <div className="mx-auto max-w-7xl">
         <Link
           href="/dashboard"
-          className="inline-block mb-8 text-sm text-emerald-200 rounded focus-visible:outline-2 focus-visible:outline-offset-4"
+          className="inline-block mb-8 text-sm text-blue-600 rounded focus-visible:outline-2 focus-visible:outline-offset-4"
         >
           ← Back to your learning
         </Link>
@@ -69,7 +69,7 @@ export default function LessonExperience({
         ) : !user || signedOut ? (
           <section>
             <h1 className="text-2xl mb-3">Sign in to your lesson</h1>
-            <Link href="/login" className="text-emerald-200 underline">
+            <Link href="/login" className="text-blue-600 underline">
               Sign in
             </Link>
           </section>
@@ -92,13 +92,13 @@ export default function LessonExperience({
           </section>
         ) : result ? (
           <>
-            <p className="text-xs uppercase tracking-[.18em] text-emerald-200 mb-3">
+            <p className="text-xs uppercase tracking-[.18em] text-blue-600 mb-3">
               Learn at your pace
             </p>
             <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight mb-3">
               {result.lesson.title}
             </h1>
-            <p className="text-sm text-slate-400 mb-8">
+            <p className="text-sm text-slate-600 mb-8">
               Watch closely. Explore each chapter. Check your understanding as
               you go.
             </p>

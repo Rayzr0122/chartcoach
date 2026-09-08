@@ -1,6 +1,8 @@
 "use client";
 import Image from "next/image";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import LessonTranscript from "./LessonTranscript";
+import LessonChat from "./LessonChat";
 import * as learningApi from "@/lib/learning-api";
 import type {
   LessonMetadata,
@@ -26,6 +28,7 @@ type Props = {
   api?: LessonApi;
   onUnauthorized: () => void;
   onRetry?: () => void;
+  previewMode?: boolean;
 };
 export default function LessonPlayer({
   lesson,
@@ -34,12 +37,14 @@ export default function LessonPlayer({
   api = learningApi,
   onUnauthorized,
   onRetry,
+  previewMode = false,
 }: Props) {
   const video = useRef<HTMLVideoElement>(null),
     container = useRef<HTMLDivElement>(null),
     dialog = useRef<HTMLDivElement>(null),
     play = useRef<HTMLButtonElement>(null);
   const controller = useRef<LessonController | null>(null);
+  const seekTo = useCallback((seconds: number) => controller.current?.seek(seconds), []);
   const [view, setView] = useState<LessonView | null>(null);
   const [expanded, setExpanded] = useState(false),
     [preview, setPreview] = useState<LessonSegment | null>(null);
@@ -70,13 +75,24 @@ export default function LessonPlayer({
     };
   }, [lesson, authorization, factory, api, onUnauthorized]);
   const prompt = view?.prompt;
+  const warning = view?.seekWarning;
+  const seekNotice = view?.seekNotice;
+  const modalOpen = Boolean(prompt || warning);
   useEffect(() => {
-    if (prompt) {
+    if (!seekNotice) return;
+    const timeout = window.setTimeout(
+      () => controller.current?.dismissSeekNotice(seekNotice),
+      4500,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [seekNotice]);
+  useEffect(() => {
+    if (prompt || warning) {
       dialog.current
         ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
         ?.focus();
     }
-  }, [prompt, view?.correct, view?.busy]);
+  }, [prompt, warning, view?.correct, view?.busy]);
   async function fullscreen() {
     if (document.fullscreenElement) {
       await document.exitFullscreen();
@@ -133,6 +149,7 @@ export default function LessonPlayer({
       ref={container}
       className={`${styles.workspace} ${expanded ? styles.expanded : ""}`}
     >
+      <div className={styles.mediaColumn}>
       <div
         className={styles.player}
         role="region"
@@ -141,16 +158,25 @@ export default function LessonPlayer({
         onKeyDown={keyboard}
       >
         <header className={styles.brand}>
+          <span>{lesson.title}</span>
           <span>ChartCoach</span>
-          <span>LESSON ROOM · ENGLISH</span>
         </header>
         <div className={styles.screen}>
+          {previewMode && (
+            <div className={styles.previewVisual} aria-hidden="true">
+              <span>SIMULATED LESSON MEDIA</span>
+              <strong>{active?.title}</strong>
+              <small>Timeline and knowledge-check interactions are live in this preview.</small>
+            </div>
+          )}
           <video
             ref={video}
             aria-label="Lesson media"
             playsInline
             preload="metadata"
+            poster={lesson.segments[0]?.thumbnail.url}
             controls={false}
+            className={previewMode ? styles.previewVideo : undefined}
           />
           {(!view?.ready || s?.buffering) && (
             <p className={styles.loading} role="status">
@@ -158,18 +184,19 @@ export default function LessonPlayer({
             </p>
           )}
         </div>
-        <div className={styles.controls} inert={Boolean(prompt)}>
+        <div className={styles.controls} inert={modalOpen}>
           <div className={styles.timeline}>
             <input
               type="range"
               aria-label="Playback position"
+              title="Seek backward / forward (← / →)"
               min={0}
               max={lesson.duration_seconds}
               step={0.1}
               value={position}
               onChange={(e) => controller.current?.seek(Number(e.target.value))}
               style={{
-                background: `linear-gradient(to right, #56cbb1 ${(position / lesson.duration_seconds) * 100}%, #344152 0)`,
+                background: `linear-gradient(to right, #ff167d ${(position / lesson.duration_seconds) * 100}%, #ffffff40 0)`,
               }}
             />
             <div className={styles.markers}>
@@ -239,19 +266,24 @@ export default function LessonPlayer({
               disabled={!view?.ready}
               onClick={() => void controller.current?.togglePlay()}
               aria-label={s?.paused !== false ? "Play" : "Pause"}
+              data-tooltip={s?.paused !== false ? "Play (K / Space)" : "Pause (K / Space)"}
+              aria-keyshortcuts="k Space"
             >
-              {s?.paused !== false ? "▶ Play" : "Ⅱ Pause"}
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">{s?.paused !== false ? <path d="M7 3.5v17l14-8.5z" /> : <path d="M6 4h4v16H6zm8 0h4v16h-4z" />}</svg>
             </button>
             <button
               type="button"
               aria-label={s?.muted ? "Unmute" : "Mute"}
+              data-tooltip={s?.muted ? "Unmute (M)" : "Mute (M)"}
+              aria-keyshortcuts="m"
               onClick={() => controller.current?.setMuted(!s?.muted)}
             >
-              {s?.muted ? "Unmute" : "Mute"}
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4 5 9H2v6h3l6 5z" fill="currentColor" stroke="none" />{s?.muted ? <path d="m16 9 6 6m0-6-6 6" /> : <><path d="M15 8a6 6 0 0 1 0 8" /><path d="M18 4a11 11 0 0 1 0 16" /></>}</svg>
             </button>
             <input
               type="range"
               aria-label="Volume"
+              title="Volume"
               min={0}
               max={1}
               step={0.05}
@@ -263,28 +295,32 @@ export default function LessonPlayer({
             <span className={styles.clock}>
               {time(position)} / {time(lesson.duration_seconds)}
             </span>
+            <select className={styles.speed} aria-label="Playback speed" title="Playback speed" value={s?.playbackRate ?? 1} disabled={!view?.ready} onChange={(event) => controller.current?.setPlaybackRate(Number(event.target.value))}>
+              {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
+            </select>
             <button
               type="button"
-              aria-label="English captions"
+              aria-label={`${lesson.captions.label} captions`}
+              data-tooltip={`${lesson.captions.label} captions (C)`}
+              aria-keyshortcuts="c"
               aria-pressed={s?.captionsEnabled ?? false}
               disabled={!s?.captionsAvailable}
               onClick={() =>
                 controller.current?.setCaptions(!s?.captionsEnabled)
               }
             >
-              CC
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M10 9H7v6h3m9-6h-3v6h3" /></svg>
             </button>
             <button
               type="button"
               aria-label={expanded ? "Exit expanded view" : "Expand player"}
+              data-tooltip={expanded ? "Exit fullscreen (F)" : "Fullscreen (F)"}
+              aria-keyshortcuts="f"
               onClick={() => void fullscreen()}
             >
-              {expanded ? "Exit expanded view" : "Expand player"}
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2.5">{expanded ? <path d="M3 8h5V3m8 0v5h5M3 16h5v5m8 0v-5h5" /> : <path d="M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5" />}</svg>
             </button>
           </div>
-          <p className={styles.hint}>
-            Space / K play · ← → seek 5s · M mute · C captions · F expand
-          </p>
         </div>
         {view?.error && !prompt && (
           <div role="alert" className={styles.error}>
@@ -295,10 +331,14 @@ export default function LessonPlayer({
           </div>
         )}
       </div>
+      <LessonTranscript key={lesson.id} url={lesson.captions.url} duration={lesson.duration_seconds} position={position} language={lesson.captions.label} onSeek={seekTo} disabled={modalOpen || !view?.ready} />
+      </div>
+      <div className={styles.studySidebar} inert={modalOpen}>
+      <LessonChat key={lesson.id} lessonId={lesson.id} position={position} onSeek={seekTo} />
       <aside
         className={styles.chapters}
         aria-label="Lesson chapters"
-        inert={Boolean(prompt)}
+        inert={modalOpen}
       >
         <p className={styles.eyebrow}>YOUR LEARNING PATH</p>
         <h2>In this lesson</h2>
@@ -346,6 +386,28 @@ export default function LessonPlayer({
             : `${Math.round(view?.progress.watch_percent ?? 0)}% watched · Progress saved as you learn`}
         </p>
       </aside>
+      </div>
+      {seekNotice && !modalOpen && (
+        <div className={styles.seekNotice} role="status" aria-label="Skip reminder">
+          <div>
+            <strong>Quick learning reminder</strong>
+            <span>Reminder {seekNotice} of 3</span>
+          </div>
+          <p>Skipped sections won’t count toward your watched progress. You can keep watching or go back whenever you’re ready.</p>
+          <button type="button" aria-label="Dismiss reminder" onClick={() => controller.current?.dismissSeekNotice(seekNotice)}>×</button>
+        </div>
+      )}
+      {warning && !prompt && (
+        <div className={styles.dialogShade}>
+          <div ref={dialog} role="alertdialog" aria-modal="true" aria-labelledby="seek-warning-title" aria-describedby="seek-warning-description" className={styles.dialog}
+            onKeyDown={(event) => { if (event.key === "Tab") { event.preventDefault(); dialog.current?.querySelector("button")?.focus(); } }}>
+            <p className={styles.eyebrow}>WATCHING REMINDER</p>
+            <h2 id="seek-warning-title">Take a moment before skipping ahead</h2>
+            <p id="seek-warning-description">You’ve skipped ahead several times or jumped over a large part of the lesson. Skipped sections don’t count toward your watched progress. You can go back to review them at any time.</p>
+            <button type="button" onClick={() => { void controller.current?.acknowledgeSeekWarning(); play.current?.focus(); }}>Continue watching</button>
+          </div>
+        </div>
+      )}
       {prompt && (
         <div className={styles.dialogShade}>
           <div

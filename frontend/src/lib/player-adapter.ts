@@ -13,6 +13,7 @@ export type PlaybackSnapshot = {
   ended: boolean;
   buffering: boolean;
   volume: number;
+  playbackRate: number;
   muted: boolean;
   captionsAvailable: boolean;
   captionsEnabled: boolean;
@@ -34,6 +35,7 @@ export interface PlayerAdapter {
   pause(): void;
   seek(seconds: number): void;
   setVolume(value: number): void;
+  setPlaybackRate(value: number): void;
   setMuted(value: boolean): void;
   setCaptions(value: boolean): void;
   snapshot(): PlaybackSnapshot;
@@ -101,6 +103,7 @@ export function createPlayerAdapter(
     "ended",
     "loadedmetadata",
     "volumechange",
+    "ratechange",
     "waiting",
     "playing",
     "error",
@@ -114,6 +117,7 @@ export function createPlayerAdapter(
       ended: video.ended,
       buffering,
       volume: video.volume,
+      playbackRate: video.playbackRate,
       muted: video.muted,
       captionsAvailable,
       captionsEnabled:
@@ -321,6 +325,9 @@ export function createPlayerAdapter(
     setVolume(value) {
       if (Number.isFinite(value) && !disposed)
         video.volume = Math.min(1, Math.max(0, value));
+    },
+    setPlaybackRate(value) {
+      if (!disposed && Number.isFinite(value) && value >= 0.5 && value <= 2) video.playbackRate = value;
     },
     setMuted(value) {
       if (!disposed) video.muted = value;

@@ -8,7 +8,16 @@
 //   attaches (and, on login, stores) that cookie.
 // - There is no token to pass around here; the browser handles it.
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
+type BrowserLocation = Pick<Location, "protocol" | "hostname">;
+
+export function resolveApiUrl(configured: string | undefined, location?: BrowserLocation): string {
+  if (configured?.trim()) return configured.trim().replace(/\/$/, "");
+  const browser = location ?? (typeof window === "undefined" ? undefined : window.location);
+  if (browser) return `${browser.protocol}//${browser.hostname}:8000`;
+  return "http://127.0.0.1:8000";
+}
+
+const API_URL = resolveApiUrl(process.env.NEXT_PUBLIC_API_URL);
 
 export type User = {
   id: number | string;

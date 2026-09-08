@@ -23,6 +23,8 @@ export type LessonView = {
   busy: boolean;
   ready: boolean;
   error: string | null;
+  seekWarning: boolean;
+  seekNotice: number | null;
 };
 
 // The browser gate is a learning interaction. The backend alone approves progress.
@@ -32,6 +34,8 @@ export class LessonController {
   private refreshed = false;
   private refreshing = false;
   private correcting = false;
+  private forwardSeeks: number[] = [];
+  private seekReminderCount = 0;
   private observedStart: number;
   private lastPosition: number;
   private lastTime = Date.now();
@@ -59,6 +63,8 @@ export class LessonController {
       busy: false,
       ready: false,
       error: null,
+      seekWarning: false,
+      seekNotice: null,
     };
     this.unsubscribe = adapter.subscribe((event) => this.onEvent(event));
   }
@@ -92,7 +98,7 @@ export class LessonController {
         return;
       }
       if (this.state.ready && !this.refreshing) void this.flush();
-    }, 8000);
+    }, 4000);
     try {
       await this.adapter.load(
         this.source,
@@ -121,12 +127,17 @@ export class LessonController {
       return;
     }
     const position = event.snapshot.position;
+    if (this.state.seekWarning) {
+      if (position !== this.lastPosition) this.move(this.lastPosition);
+      if (!this.adapter.snapshot().paused) this.adapter.pause();
+      return;
+    }
     const gate = this.gate();
     if (gate && position >= gate.end_seconds && !this.state.prompt) {
       if (
         event.type === "seeking" ||
         position - this.lastPosition >
-          Math.max(2, ((Date.now() - this.lastTime) / 1000) * 1.5 + 1)
+          Math.max(2, ((Date.now() - this.lastTime) / 1000) * event.snapshot.playbackRate * 1.5 + 1)
       )
         this.observedStart = gate.end_seconds;
       this.openGate(gate.end_seconds, gate.required_prompt!);
@@ -144,14 +155,20 @@ export class LessonController {
     }
     if (event.type === "seeking") {
       void this.flush(this.lastPosition);
+      const warn = this.recordForwardSeek(position);
       this.observedStart = position;
+      if (warn && this.raiseSeekReminder()) {
+        this.move(position);
+        this.adapter.pause();
+        return;
+      }
     } else if (event.type === "timeupdate") {
       const delta = position - this.lastPosition;
       const elapsed = (Date.now() - this.lastTime) / 1000;
       // Seeks, suspended tabs, and long gaps are never credited as watched time.
       if (
         delta < 0 ||
-        delta > Math.max(2, elapsed * 1.5 + 1) ||
+        delta > Math.max(2, elapsed * event.snapshot.playbackRate * 1.5 + 1) ||
         position - this.observedStart > 15
       )
         this.observedStart = position;
@@ -185,6 +202,7 @@ export class LessonController {
     if (
       !Number.isFinite(position) ||
       this.state.prompt ||
+      this.state.seekWarning ||
       !this.state.ready ||
       this.refreshing
     )
@@ -199,10 +217,44 @@ export class LessonController {
     if (gate && allowed >= gate.end_seconds) {
       this.observedStart = gate.end_seconds;
       this.openGate(gate.end_seconds, gate.required_prompt!);
-    } else this.move(allowed);
+    } else {
+      const warn = this.recordForwardSeek(allowed);
+      this.move(allowed);
+      if (warn && this.raiseSeekReminder()) {
+        this.adapter.pause();
+      }
+    }
+  }
+  private recordForwardSeek(position: number): boolean {
+    const delta = position - this.lastPosition;
+    if (delta <= 0 || this.gate() || !this.state.ready || this.refreshing) return false;
+    const now = Date.now();
+    this.forwardSeeks = this.forwardSeeks.filter((at) => now - at <= 120_000);
+    this.forwardSeeks.push(now);
+    return delta >= 30 || this.forwardSeeks.length >= 3;
+  }
+  private raiseSeekReminder(): boolean {
+    this.seekReminderCount += 1;
+    if (this.seekReminderCount <= 3) {
+      this.publish({ seekNotice: this.seekReminderCount });
+      return false;
+    }
+    this.publish({ seekNotice: null, seekWarning: true });
+    return true;
+  }
+  dismissSeekNotice(notice: number) {
+    if (this.state.seekNotice === notice) this.publish({ seekNotice: null });
+  }
+  async acknowledgeSeekWarning() {
+    if (!this.state.seekWarning) return;
+    this.forwardSeeks = [];
+    this.seekReminderCount = 0;
+    this.publish({ seekWarning: false });
+    await this.togglePlay();
   }
   async togglePlay() {
     if (
+      this.state.seekWarning ||
       this.state.prompt ||
       !this.state.ready ||
       this.refreshing ||
@@ -225,6 +277,12 @@ export class LessonController {
   }
   setVolume(value: number) {
     this.adapter.setVolume(value);
+  }
+  setPlaybackRate(value: number) {
+    if (!Number.isFinite(value) || value < 0.5 || value > 2) return;
+    void this.flush();
+    this.adapter.setPlaybackRate(value);
+    this.publish();
   }
   setCaptions(value: boolean) {
     this.adapter.setCaptions(value);
