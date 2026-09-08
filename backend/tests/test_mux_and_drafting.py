@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -27,7 +27,7 @@ def rsa_key_pair() -> tuple[str, str]:
 
 def test_mux_signer_returns_separate_rs256_video_and_drm_capabilities():
     private_key_base64, public_key = rsa_key_pair()
-    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
     signer = MuxPlaybackSigner(
         key_id="mux-key-1",
         private_key_base64=private_key_base64,
@@ -51,7 +51,7 @@ def test_mux_signer_returns_separate_rs256_video_and_drm_capabilities():
     assert authorization["fairplay_certificate_url"].startswith(
         "https://license.mux.com/appcert/fairplay/mux-playback-1?token="
     )
-    assert authorization["expires_at"] == "2026-09-07T14:00:00+00:00"
+    assert authorization["expires_at"] == (now + timedelta(minutes=120)).isoformat()
 
     playback_claims = jwt.decode(
         authorization["playback_token"], public_key, algorithms=["RS256"], audience="v"
