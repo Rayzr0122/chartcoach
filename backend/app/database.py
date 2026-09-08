@@ -1,15 +1,36 @@
 # This file sets up the connection to the MongoDB database.
 
+from typing import Any
+
 import pymongo
 from pymongo.database import Database
 
 from app.config import settings
 
-# MongoClient connection to MongoDB
-client: pymongo.MongoClient = pymongo.MongoClient(
-    settings.database_url,
-    serverSelectionTimeoutMS=5000,
-)
+def create_client() -> Any:
+    """Create the configured database client.
+
+    ``mongomock://`` is an explicit local-development mode so contributors can
+    run the account/player flow without a MongoDB daemon. Production URLs still
+    use a real PyMongo client; there is no silent fallback on connection errors.
+    """
+    if settings.database_url.startswith("mongomock://"):
+        try:
+            import mongomock
+        except ImportError as exc:  # pragma: no cover - packaging guard
+            raise RuntimeError(
+                "mongomock is required when DATABASE_URL uses mongomock://"
+            ) from exc
+        return mongomock.MongoClient()
+
+    return pymongo.MongoClient(
+        settings.database_url,
+        serverSelectionTimeoutMS=5000,
+    )
+
+
+# MongoClient connection to MongoDB (or explicit in-memory local development).
+client: Any = create_client()
 
 # Active database instance
 db: Database = client[settings.database_name]

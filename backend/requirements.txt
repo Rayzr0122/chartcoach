@@ -5,6 +5,7 @@ uvicorn[standard]
 # Database (MongoDB)
 pymongo[srv]>=4.17.0
 dnspython>=2.8.0
+mongomock>=4.3.0
 # Optional: pymysql kept for running scripts/migrate_mysql_to_mongo.py
 pymysql
 
