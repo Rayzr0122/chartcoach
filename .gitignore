@@ -5,6 +5,7 @@ Thumbs.db
 .idea/
 .worktrees/
 .local/
+.media/
 
 # Node / Frontend
 node_modules/

@@ -108,3 +108,6 @@ The existing `POST /learning/lessons/{lessonId}/playback` endpoint remains as a
 compatibility route. New clients use `POST
 /learning/lessons/{lessonId}/playback-sessions` and renew via `POST
 /learning/lessons/{lessonId}/playback-sessions/{sessionId}/renew`.
+
+See `docs/media-ingest.md` for the local asset import, status, worker, and retry
+commands introduced in Sprint 2.
