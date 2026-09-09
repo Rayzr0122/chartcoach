@@ -4,6 +4,7 @@ Thumbs.db
 .vscode/
 .idea/
 .worktrees/
+.local/
 
 # Node / Frontend
 node_modules/
