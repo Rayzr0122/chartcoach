@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # plain http://, but this MUST be True in any real deployment.
     cookie_secure: bool = False
 
+    app_environment: str = "development"
+    playback_provider: str = "mux"
+
     # Mux signing is optional so unrelated APIs can start without video credentials.
     mux_signing_key_id: str | None = None
     mux_signing_private_key_base64: str | None = None

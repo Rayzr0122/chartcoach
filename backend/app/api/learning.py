@@ -18,20 +18,18 @@ from app.services.learning import (
     PromptNotFound,
     PromptNotReady,
 )
-from app.services.mux import MuxPlaybackSigner, MuxSigningUnavailable
+from app.services.mux import MuxSigningUnavailable
+from app.services.playback_providers import (
+    PlaybackProviderUnavailable,
+    build_playback_provider,
+)
 
 
 router = APIRouter(prefix="/learning", tags=["learning"])
 
 
 def get_learning_service(db: Database = Depends(get_db)) -> LearningService:
-    signer = MuxPlaybackSigner(
-        key_id=settings.mux_signing_key_id,
-        private_key_base64=settings.mux_signing_private_key_base64,
-        expire_minutes=settings.mux_playback_token_expire_minutes,
-        playback_restriction_id=settings.mux_playback_restriction_id,
-    )
-    return LearningService(db, signer)
+    return LearningService(db, build_playback_provider(settings))
 
 
 def _translate_service_error(operation: Callable[[], Any]) -> Any:
@@ -47,7 +45,7 @@ def _translate_service_error(operation: Callable[[], Any]) -> Any:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ProgressError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    except MuxSigningUnavailable as exc:
+    except (MuxSigningUnavailable, PlaybackProviderUnavailable) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Secure video playback is temporarily unavailable.",
@@ -72,6 +70,31 @@ def start_playback(
     service: LearningService = Depends(get_learning_service),
 ):
     return _translate_service_error(lambda: service.start_playback(lesson_id, user))
+
+
+@router.post("/lessons/{lesson_id}/playback-sessions")
+@limiter.limit("30/minute")
+def create_playback_session(
+    request: Request,
+    lesson_id: str,
+    user: User = Depends(get_current_user),
+    service: LearningService = Depends(get_learning_service),
+):
+    return _translate_service_error(lambda: service.start_playback(lesson_id, user))
+
+
+@router.post("/lessons/{lesson_id}/playback-sessions/{playback_session_id}/renew")
+@limiter.limit("30/minute")
+def renew_playback_session(
+    request: Request,
+    lesson_id: str,
+    playback_session_id: str,
+    user: User = Depends(get_current_user),
+    service: LearningService = Depends(get_learning_service),
+):
+    return _translate_service_error(
+        lambda: service.renew_playback(lesson_id, user, playback_session_id)
+    )
 
 
 @router.put("/lessons/{lesson_id}/progress")

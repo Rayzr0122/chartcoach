@@ -41,6 +41,15 @@ $backendEnvironment = @{
     JWT_SECRET_KEY = $localEnvironment.CHARTCOACH_JWT_SECRET
     FRONTEND_ORIGIN = "http://127.0.0.1:3000"
     COOKIE_SECURE = "false"
+    APP_ENVIRONMENT = "development"
+    PLAYBACK_PROVIDER = "mux"
+}
+
+foreach ($requiredPort in @(3000, 8000)) {
+    $listener = Get-NetTCPConnection -LocalPort $requiredPort -State Listen -ErrorAction SilentlyContinue
+    if ($listener) {
+        throw "Port $requiredPort is already in use by process $($listener[0].OwningProcess). Stop the existing local stack first."
+    }
 }
 $backendProcess = Start-Process python -WorkingDirectory (Join-Path $workspace "backend") `
     -WindowStyle Hidden -PassThru -Environment $backendEnvironment `
@@ -54,6 +63,25 @@ $frontendProcess = Start-Process npm.cmd -WorkingDirectory (Join-Path $workspace
     -ArgumentList "run", "dev", "--", "--hostname", "127.0.0.1", "--port", "3000"
 [IO.File]::WriteAllText((Join-Path $localState "backend.pid"), "$($backendProcess.Id)")
 [IO.File]::WriteAllText((Join-Path $localState "frontend.pid"), "$($frontendProcess.Id)")
+
+$deadline = (Get-Date).AddSeconds(45)
+do {
+    Start-Sleep -Milliseconds 500
+    try {
+        $backendReady = (Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:8000/health" -TimeoutSec 2).StatusCode -eq 200
+    } catch {
+        $backendReady = $false
+    }
+    try {
+        $frontendReady = (Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:3000/login" -TimeoutSec 2).StatusCode -eq 200
+    } catch {
+        $frontendReady = $false
+    }
+} until (($backendReady -and $frontendReady) -or (Get-Date) -ge $deadline)
+
+if (-not ($backendReady -and $frontendReady)) {
+    throw "ChartCoach did not become ready. Inspect the .local error logs."
+}
 Write-Host "ChartCoach is starting at http://127.0.0.1:3000"
 Write-Host "MongoDB data persists in the chartcoach-local-mongo-data Docker volume."
 Write-Host "Logs and generated local credentials live in $localState and are ignored by Git."

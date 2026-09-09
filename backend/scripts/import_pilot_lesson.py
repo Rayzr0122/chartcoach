@@ -14,6 +14,7 @@ from typing import Any
 import pymongo
 
 from app.domain.learning import Lesson
+from app.services.playback_providers import migrate_lesson_media_assets
 
 
 COURSE_ID = "price-action-secrets"
@@ -126,6 +127,7 @@ def upsert_pilot_lesson(
         {"$set": lesson_doc, "$setOnInsert": {"created_at": now}},
         upsert=True,
     )
+    migrate_lesson_media_assets(db)
 
     enrollment_count = 0
     if enrollment_email:

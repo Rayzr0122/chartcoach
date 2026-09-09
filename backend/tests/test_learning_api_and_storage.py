@@ -19,6 +19,7 @@ from app.database import get_db, init_db
 from app.domain.learning import Lesson
 from app.services.learning import LearningService
 from app.services.mux import MuxPlaybackSigner
+from app.services.playback_providers import MuxPlaybackProvider
 
 
 class StaticSigner:
@@ -123,6 +124,7 @@ def test_init_db_creates_learning_unique_and_query_indexes(monkeypatch):
 
     assert db.courses.index_information()["course_id_unique"]["unique"] is True
     assert db.lessons.index_information()["lesson_id_unique"]["unique"] is True
+    assert db.media_assets.index_information()["media_asset_id_unique"]["unique"] is True
     assert db.enrollments.index_information()["user_course_unique"]["unique"] is True
     assert db.lesson_progress.index_information()["user_lesson_unique"]["unique"] is True
     assert "lesson_course_published" in db.lessons.index_information()
@@ -217,6 +219,26 @@ def test_cookie_auth_and_progress_attempt_routes_use_active_session(api_context)
     assert correct.json()["is_correct"] is True
 
 
+def test_playback_session_endpoint_and_renewal_rotate_the_active_session(api_context):
+    _, _, client, header = api_context
+    started = client.post("/learning/lessons/l1/playback-sessions", headers=header)
+    assert started.status_code == 200
+    first_id = started.json()["playback_session_id"]
+
+    renewed = client.post(
+        f"/learning/lessons/l1/playback-sessions/{first_id}/renew",
+        headers=header,
+    )
+    assert renewed.status_code == 200
+    assert renewed.json()["playback_session_id"] != first_id
+
+    stale = client.post(
+        f"/learning/lessons/l1/playback-sessions/{first_id}/renew",
+        headers=header,
+    )
+    assert stale.status_code == 409
+
+
 def test_playback_returns_controlled_503_when_mux_signing_is_unconfigured(api_context):
     db, app, client, header = api_context
     app.dependency_overrides.pop(learning.get_learning_service)
@@ -245,7 +267,9 @@ def test_playback_route_returns_complete_signed_mux_contract_without_user_pii(ap
         private_key_base64=base64.b64encode(private_pem).decode("ascii"),
         expire_minutes=120,
     )
-    app.dependency_overrides[learning.get_learning_service] = lambda: LearningService(db, signer)
+    app.dependency_overrides[learning.get_learning_service] = lambda: LearningService(
+        db, MuxPlaybackProvider(signer)
+    )
 
     response = client.post("/learning/lessons/l1/playback", headers=header)
 

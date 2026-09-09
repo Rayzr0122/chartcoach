@@ -47,6 +47,12 @@ def init_db() -> None:
         ("course_slug_unique", db.courses, "slug", {"unique": True, "name": "course_slug_unique"}),
         ("lesson_id_unique", db.lessons, "id", {"unique": True, "name": "lesson_id_unique"}),
         (
+            "media_asset_id_unique",
+            db.media_assets,
+            "id",
+            {"unique": True, "name": "media_asset_id_unique"},
+        ),
+        (
             "lesson_course_published",
             db.lessons,
             [("course_id", pymongo.ASCENDING), ("published", pymongo.ASCENDING)],

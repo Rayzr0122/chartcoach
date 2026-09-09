@@ -30,7 +30,7 @@ class PromptNotFound(RuntimeError):
 class LearningService:
     def __init__(self, db: Any, signer: Any) -> None:
         self.db = db
-        self.signer = signer
+        self.playback_provider = signer
 
     @staticmethod
     def _user_id(user: Any) -> str:
@@ -136,7 +136,22 @@ class LearningService:
 
     def start_playback(self, lesson_id: str, user: Any) -> dict[str, Any]:
         lesson = self._load_authorized_lesson(lesson_id, user)
-        capabilities = self.signer.authorize(lesson.mux_playback_id, lesson.duration_seconds)
+        asset = (
+            self.db.media_assets.find_one({"id": lesson.media_asset_id})
+            if lesson.media_asset_id
+            else None
+        )
+        # Compatibility for records which have not yet passed the idempotent
+        # media-asset migration. New records must always use media_asset_id.
+        if not asset:
+            if not lesson.mux_playback_id:
+                raise LessonNotFound("Lesson media was not found")
+            asset = {
+                "id": f"mux-{lesson.mux_playback_id}",
+                "source_provider": "mux",
+                "provider_asset_id": lesson.mux_playback_id,
+            }
+        capabilities = self.playback_provider.authorize(asset, lesson.duration_seconds)
         session_id = uuid4().hex
         progress = self._normalized_progress(
             lesson,
@@ -151,6 +166,14 @@ class LearningService:
             "resume_position_seconds": progress["resume_position_seconds"],
             "pending_prompt_id": progress["pending_prompt_id"],
         }
+
+    def renew_playback(
+        self, lesson_id: str, user: Any, playback_session_id: str
+    ) -> dict[str, Any]:
+        stored = self._progress_doc(lesson_id, user)
+        if not stored or stored.get("playback_session_id") != playback_session_id:
+            raise PlaybackSessionMismatch("Playback session is missing or has been rotated")
+        return self.start_playback(lesson_id, user)
 
     def update_progress(
         self,

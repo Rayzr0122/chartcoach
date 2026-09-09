@@ -172,6 +172,18 @@ it("configures only the FairPlay path with scoped filters and certificate, dispo
   expect(widevine.filters.size).toBe(0);
   await widevine.adapter.destroy();
 });
+it("does not apply Mux FairPlay transforms to a local provider contract", async () => {
+  const t = setup(true);
+  await t.adapter.load(
+    { ...source, provider: "local", drm: { type: "development-clear-key" } },
+    0,
+  );
+  expect(t.filters.size).toBe(0);
+  expect(t.configuration).not.toContainEqual(
+    expect.objectContaining({ streaming: { useNativeHlsForFairPlay: true } }),
+  );
+  await t.adapter.destroy();
+});
 it("ignores a stale load after destroy during engine import", async () => {
   const t = setup();
   let resolve!: (v: never) => void;

@@ -218,7 +218,8 @@ export function createPlayerAdapter(
               },
             },
           });
-          if (fairplay) {
+          const providerDrm = source.drm?.type ?? "mux";
+          if (fairplay && providerDrm === "mux") {
             const helpers = runtime.drm.FairPlay;
             if (
               !helpers.muxFairPlayRequest ||

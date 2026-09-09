@@ -40,6 +40,11 @@ Stop processes without deleting data:
 .\stop-local.ps1
 ```
 
+The launcher checks ports 3000, 8000, and 27018 before starting and waits for
+both application health checks. It fails with the owning process ID if another
+stack is still running. Shutdown terminates the complete frontend/backend child
+process trees so a restart cannot silently serve stale code.
+
 MongoDB data is stored in the named Docker volume
 `chartcoach-local-mongo-data`. `docker compose stop` and ordinary Docker
 Desktop restarts preserve it. Deleting that volume is destructive and is not
@@ -87,3 +92,19 @@ Widevine and FairPlay applications are an organizational task and run in
 parallel with local engineering. Until approved credentials exist, later local
 encryption uses a clearly labelled development-only path and cannot establish
 production DRM compatibility.
+
+## Playback provider migration
+
+The backend defaults to `PLAYBACK_PROVIDER=mux`. `local` is accepted only when
+`APP_ENVIRONMENT` is `development` or `test`; production startup refuses that
+selection. Existing Mux lessons can be linked to stable internal media asset
+records idempotently from `backend`:
+
+```powershell
+python -m scripts.migrate_media_assets
+```
+
+The existing `POST /learning/lessons/{lessonId}/playback` endpoint remains as a
+compatibility route. New clients use `POST
+/learning/lessons/{lessonId}/playback-sessions` and renew via `POST
+/learning/lessons/{lessonId}/playback-sessions/{sessionId}/renew`.

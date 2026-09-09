@@ -36,6 +36,9 @@ export type LessonMetadata = {
   progress: LessonProgress;
 };
 export type PlaybackAuthorization = {
+  provider?: "mux" | "local";
+  media_asset_id?: string;
+  drm?: { type: "mux" | "development-clear-key" };
   playback_session_id: string;
   resume_position_seconds: number;
   pending_prompt_id: string | null;
@@ -107,7 +110,15 @@ async function request<T>(
 export const getLesson = (id: string) =>
   request<LessonMetadata>(encodeURIComponent(id), "GET");
 export const authorizePlayback = (id: string) =>
-  request<PlaybackAuthorization>(`${encodeURIComponent(id)}/playback`, "POST");
+  request<PlaybackAuthorization>(
+    `${encodeURIComponent(id)}/playback-sessions`,
+    "POST",
+  );
+export const renewPlayback = (id: string, playbackSessionId: string) =>
+  request<PlaybackAuthorization>(
+    `${encodeURIComponent(id)}/playback-sessions/${encodeURIComponent(playbackSessionId)}/renew`,
+    "POST",
+  );
 export const saveProgress = (id: string, body: ProgressObservation) =>
   request<LessonProgress>(`${encodeURIComponent(id)}/progress`, "PUT", body);
 export const submitAttempt = (

@@ -2,6 +2,14 @@ $ErrorActionPreference = "Stop"
 $workspace = $PSScriptRoot
 $localState = Join-Path $workspace ".local"
 
+function Stop-ProcessTree([int]$RootProcessId) {
+    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $RootProcessId" -ErrorAction SilentlyContinue)
+    foreach ($child in $children) {
+        Stop-ProcessTree -RootProcessId $child.ProcessId
+    }
+    Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue
+}
+
 foreach ($name in @("frontend", "backend")) {
     $pidFile = Join-Path $localState "$name.pid"
     if (-not (Test-Path -LiteralPath $pidFile)) {
@@ -11,7 +19,7 @@ foreach ($name in @("frontend", "backend")) {
     $processId = [int](Get-Content -LiteralPath $pidFile -Raw)
     $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
     if ($process) {
-        Stop-Process -Id $processId -Force
+        Stop-ProcessTree -RootProcessId $processId
     }
     Remove-Item -LiteralPath $pidFile -Force
 }
