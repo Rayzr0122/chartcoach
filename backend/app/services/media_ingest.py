@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -128,6 +129,33 @@ class MediaIngestService:
             }
         )
         return asset
+
+    def attach_caption(
+        self,
+        asset_id: str,
+        caption_path: Path,
+        *,
+        language: str,
+        label: str,
+    ) -> dict[str, str]:
+        if not re.fullmatch(r"[A-Za-z0-9-]+", language):
+            raise InvalidMediaSource("caption language is invalid")
+        if not label or len(label) > 100 or any(character in label for character in ",\r\n"):
+            raise InvalidMediaSource("caption label is invalid")
+        caption = caption_path.resolve()
+        if not caption.is_file() or "-->" not in caption.read_text(encoding="utf-8-sig", errors="replace"):
+            raise InvalidMediaSource("caption file is not a recognized timed-text source")
+        if not self.db.media_assets.find_one({"id": asset_id}):
+            raise InvalidMediaSource("media asset was not found")
+        checksum = _sha256(caption)
+        record = {
+            "language": language,
+            "label": label,
+            "source_checksum": checksum,
+            "source_key": self.storage.store_source(caption, checksum),
+        }
+        self.db.media_assets.update_one({"id": asset_id}, {"$addToSet": {"captions": record}})
+        return record
 
 
 class ProcessingJobWorker:

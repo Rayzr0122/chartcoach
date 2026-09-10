@@ -17,6 +17,7 @@ from app.services.media_ingest import (
     MediaIngestService,
     ProcessingJobWorker,
 )
+from app.services.media_packaging import MediaPackagingService, validate_generation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,6 +34,14 @@ def build_parser() -> argparse.ArgumentParser:
     retry_command.add_argument("job_id")
     worker_command = commands.add_parser("worker", help="Run the single leased media worker")
     worker_command.add_argument("--once", action="store_true")
+    package_command = commands.add_parser("package", help="Create an adaptive package generation")
+    package_command.add_argument("asset_id")
+    package_command.add_argument("--generation", required=True)
+    caption_command = commands.add_parser("caption", help="Attach a timed-text source to an asset")
+    caption_command.add_argument("asset_id")
+    caption_command.add_argument("source")
+    caption_command.add_argument("--language", required=True)
+    caption_command.add_argument("--label", required=True)
     return parser
 
 
@@ -53,10 +62,22 @@ def main() -> None:
         asset = db.media_assets.find_one({"id": args.asset_id}, {"_id": 0})
         jobs = list(db.processing_jobs.find({"asset_id": args.asset_id}, {"_id": 0}))
         print(json.dumps({"asset": asset, "jobs": jobs}, default=str))
+    elif args.command == "caption":
+        caption = MediaIngestService(
+            db,
+            FileMediaStorage(Path(args.media_root)),
+            FFprobeMediaProbe(),
+        ).attach_caption(
+            args.asset_id,
+            Path(args.source),
+            language=args.language,
+            label=args.label,
+        )
+        print(json.dumps(caption))
     elif args.command == "retry":
         ProcessingJobWorker(db, worker_id="operator-cli").retry(args.job_id)
         print(json.dumps({"job_id": args.job_id, "state": "queued"}))
-    else:
+    elif args.command == "worker":
         worker = ProcessingJobWorker(db, worker_id=f"{socket.gethostname()}-{os.getpid()}")
         storage = FileMediaStorage(Path(args.media_root))
         probe = FFprobeMediaProbe()
@@ -67,6 +88,13 @@ def main() -> None:
                 break
             if not worked:
                 time.sleep(2)
+    else:
+        generation = MediaPackagingService(db, Path(args.media_root)).package(
+            args.asset_id,
+            generation_id=args.generation,
+            validate=validate_generation,
+        )
+        print(json.dumps({"generation": generation["id"], "state": generation["state"]}))
 
 
 if __name__ == "__main__":

@@ -126,6 +126,7 @@ def test_init_db_creates_learning_unique_and_query_indexes(monkeypatch):
     assert db.lessons.index_information()["lesson_id_unique"]["unique"] is True
     assert db.media_assets.index_information()["media_asset_id_unique"]["unique"] is True
     assert db.media_assets.index_information()["media_source_checksum_unique"]["unique"] is True
+    assert db.media_generations.index_information()["media_generation_id_unique"]["unique"] is True
     assert "processing_jobs_state_lease" in db.processing_jobs.index_information()
     assert db.enrollments.index_information()["user_course_unique"]["unique"] is True
     assert db.lesson_progress.index_information()["user_lesson_unique"]["unique"] is True

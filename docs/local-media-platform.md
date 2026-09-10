@@ -111,3 +111,6 @@ compatibility route. New clients use `POST
 
 See `docs/media-ingest.md` for the local asset import, status, worker, and retry
 commands introduced in Sprint 2.
+
+See `docs/media-packaging.md` for the pinned adaptive encoding pipeline,
+operator commands, validation rules, and measured Sprint 3 evidence.

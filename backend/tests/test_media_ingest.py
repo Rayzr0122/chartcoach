@@ -100,3 +100,22 @@ def test_worker_validates_the_stored_source_before_marking_it_ready(tmp_path):
     assert ProcessingJobWorker(db, worker_id="worker-a").run_once(storage, Probe()) is True
     assert db.processing_jobs.find_one({"asset_id": asset["id"]})["state"] == "succeeded"
     assert db.media_assets.find_one({"id": asset["id"]})["state"] == "ready_for_encoding"
+
+
+def test_caption_attachment_is_checksum_backed_and_idempotent(tmp_path):
+    db = mongomock.MongoClient().chartcoach
+    db.media_assets.insert_one({"id": "asset-1"})
+    caption = tmp_path / "captions.srt"
+    caption.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
+    service = MediaIngestService(db, FileMediaStorage(tmp_path / "media"), Probe())
+
+    first = service.attach_caption("asset-1", caption, language="hi", label="Hindi")
+    second = service.attach_caption("asset-1", caption, language="hi", label="Hindi")
+
+    assert first == second
+    assert db.media_assets.find_one({"id": "asset-1"})["captions"] == [first]
+
+    with pytest.raises(InvalidMediaSource, match="language"):
+        service.attach_caption("asset-1", caption, language="hi,role=evil", label="Hindi")
+    with pytest.raises(InvalidMediaSource, match="label"):
+        service.attach_caption("asset-1", caption, language="hi", label="Hindi,role=evil")

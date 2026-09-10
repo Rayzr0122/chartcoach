@@ -59,6 +59,12 @@ def init_db() -> None:
             {"unique": True, "sparse": True, "name": "media_source_checksum_unique"},
         ),
         (
+            "media_generation_id_unique",
+            db.media_generations,
+            "id",
+            {"unique": True, "name": "media_generation_id_unique"},
+        ),
+        (
             "processing_jobs_state_lease",
             db.processing_jobs,
             [("state", pymongo.ASCENDING), ("lease_expires_at", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)],
