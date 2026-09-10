@@ -7,6 +7,7 @@ the manifest and license endpoints it names.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from app.services.mux import MuxPlaybackSigner
@@ -17,7 +18,12 @@ class PlaybackProviderUnavailable(RuntimeError):
 
 
 class PlaybackProvider(Protocol):
-    def authorize(self, asset: dict[str, Any], lesson_duration_seconds: float) -> dict[str, Any]: ...
+    def authorize(
+        self,
+        asset: dict[str, Any],
+        lesson_duration_seconds: float,
+        playback_session_id: str | None = None,
+    ) -> dict[str, Any]: ...
 
 
 class MuxPlaybackProvider:
@@ -26,7 +32,12 @@ class MuxPlaybackProvider:
     def __init__(self, signer: MuxPlaybackSigner) -> None:
         self._signer = signer
 
-    def authorize(self, asset: dict[str, Any], lesson_duration_seconds: float) -> dict[str, Any]:
+    def authorize(
+        self,
+        asset: dict[str, Any],
+        lesson_duration_seconds: float,
+        playback_session_id: str | None = None,
+    ) -> dict[str, Any]:
         playback_id = asset.get("provider_asset_id")
         if not isinstance(playback_id, str) or not playback_id:
             raise PlaybackProviderUnavailable("Mux media asset is not configured")
@@ -42,10 +53,23 @@ class MuxPlaybackProvider:
 class DevelopmentPlaybackProvider:
     name = "local"
 
-    def __init__(self, *, environment: str) -> None:
+    def __init__(
+        self,
+        *,
+        environment: str,
+        media_base_url: str = "http://127.0.0.1:8000",
+        session_minutes: int = 15,
+    ) -> None:
         self._environment = environment
+        self._media_base_url = media_base_url.rstrip("/")
+        self._session_minutes = session_minutes
 
-    def authorize(self, asset: dict[str, Any], lesson_duration_seconds: float) -> dict[str, Any]:
+    def authorize(
+        self,
+        asset: dict[str, Any],
+        lesson_duration_seconds: float,
+        playback_session_id: str | None = None,
+    ) -> dict[str, Any]:
         if self._environment.lower() not in {"development", "test"}:
             raise PlaybackProviderUnavailable("The local playback provider is development-only")
         asset_id = asset.get("id")
@@ -53,19 +77,29 @@ class DevelopmentPlaybackProvider:
             raise PlaybackProviderUnavailable("Local media asset is not configured")
         if asset.get("source_provider") != "local":
             raise PlaybackProviderUnavailable("The local provider requires a local asset")
+        if asset.get("state") != "ready" or not asset.get("published_generation_id"):
+            raise PlaybackProviderUnavailable("The local asset has no published generation")
+        if not playback_session_id:
+            raise PlaybackProviderUnavailable("A playback session is required")
+        session_root = f"{self._media_base_url}/media/playback-sessions/{playback_session_id}"
         return {
             "provider": self.name,
             "media_asset_id": asset_id,
             "playback_id": asset_id,
-            "manifest_url": f"/media/assets/{asset_id}/manifest.m3u8",
-            "widevine_license_url": "",
+            "manifest_url": f"{session_root}/manifest.mpd",
+            "widevine_license_url": f"{session_root}/clearkey",
             "playready_license_url": "",
             "fairplay_license_url": "",
             "fairplay_certificate_url": "",
             "playback_token": "",
             "drm_token": "",
-            "expires_at": "2099-01-01T00:00:00+00:00",
-            "drm": {"type": "development-clear-key"},
+            "expires_at": (
+                datetime.now(timezone.utc) + timedelta(minutes=self._session_minutes)
+            ).isoformat(),
+            "drm": {
+                "type": "development-clear-key",
+                "license_url": f"{session_root}/clearkey",
+            },
         }
 
 
@@ -83,7 +117,11 @@ def build_playback_provider(config: Any) -> PlaybackProvider:
     if selected == "local":
         if config.app_environment.lower() not in {"development", "test"}:
             raise PlaybackProviderUnavailable("The local playback provider is development-only")
-        return DevelopmentPlaybackProvider(environment=config.app_environment)
+        return DevelopmentPlaybackProvider(
+            environment=config.app_environment,
+            media_base_url=getattr(config, "media_base_url", "http://127.0.0.1:8000"),
+            session_minutes=getattr(config, "local_playback_session_minutes", 15),
+        )
     raise PlaybackProviderUnavailable(f"Unknown playback provider: {selected}")
 
 

@@ -29,6 +29,11 @@ foreach ($line in Get-Content -LiteralPath $envFile) {
     $key, $value = $line.Split("=", 2)
     $localEnvironment[$key] = $value
 }
+if (-not $localEnvironment.ContainsKey("LOCAL_MEDIA_WRAPPING_SECRET")) {
+    $wrappingSecret = -join ((1..64) | ForEach-Object { "0123456789abcdef"[(Get-Random -Maximum 16)] })
+    Add-Content -LiteralPath $envFile -Value "LOCAL_MEDIA_WRAPPING_SECRET=$wrappingSecret"
+    $localEnvironment["LOCAL_MEDIA_WRAPPING_SECRET"] = $wrappingSecret
+}
 
 docker info --format "{{.ServerVersion}}" | Out-Null
 docker compose --env-file $envFile -f (Join-Path $workspace "compose.local.yml") up -d --wait mongo
@@ -43,6 +48,8 @@ $backendEnvironment = @{
     COOKIE_SECURE = "false"
     APP_ENVIRONMENT = "development"
     PLAYBACK_PROVIDER = "mux"
+    LOCAL_MEDIA_WRAPPING_SECRET = $localEnvironment.LOCAL_MEDIA_WRAPPING_SECRET
+    MEDIA_ROOT = (Join-Path $workspace ".media")
 }
 
 foreach ($requiredPort in @(3000, 8000)) {

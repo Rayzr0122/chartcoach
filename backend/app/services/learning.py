@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -151,8 +151,34 @@ class LearningService:
                 "source_provider": "mux",
                 "provider_asset_id": lesson.mux_playback_id,
             }
-        capabilities = self.playback_provider.authorize(asset, lesson.duration_seconds)
         session_id = uuid4().hex
+        capabilities = self.playback_provider.authorize(asset, lesson.duration_seconds, session_id)
+        now = datetime.now(timezone.utc)
+        try:
+            expires_at = datetime.fromisoformat(str(capabilities["expires_at"]).replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            expires_at = now + timedelta(minutes=15)
+        self.db.playback_sessions.update_many(
+            {
+                "user_id": self._user_id(user),
+                "lesson_id": lesson.id,
+                "status": "active",
+            },
+            {"$set": {"status": "rotated", "rotated_at": now}},
+        )
+        self.db.playback_sessions.insert_one(
+            {
+                "id": session_id,
+                "user_id": self._user_id(user),
+                "lesson_id": lesson.id,
+                "course_id": lesson.course_id,
+                "asset_id": asset["id"],
+                "generation_id": asset.get("published_generation_id"),
+                "status": "active",
+                "created_at": now,
+                "expires_at": expires_at,
+            }
+        )
         progress = self._normalized_progress(
             lesson,
             user,

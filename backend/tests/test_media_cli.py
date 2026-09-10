@@ -9,5 +9,7 @@ def test_media_cli_supports_import_status_and_retry_commands():
     assert parser.parse_args(["worker", "--once"]).once is True
     package = parser.parse_args(["package", "asset-1", "--generation", "g1"])
     assert (package.asset_id, package.generation) == ("asset-1", "g1")
+    encrypted = parser.parse_args(["package", "asset-1", "--generation", "g2", "--encrypt"])
+    assert encrypted.encrypt is True
     caption = parser.parse_args(["caption", "asset-1", "captions.srt", "--language", "hi", "--label", "Hindi"])
     assert (caption.asset_id, caption.language, caption.label) == ("asset-1", "hi", "Hindi")

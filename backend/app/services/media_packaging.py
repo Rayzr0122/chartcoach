@@ -60,10 +60,18 @@ class SubprocessRunner:
 
 
 class MediaPackagingService:
-    def __init__(self, db: Any, storage_root: Path, *, runner: CommandRunner | None = None) -> None:
+    def __init__(
+        self,
+        db: Any,
+        storage_root: Path,
+        *,
+        runner: CommandRunner | None = None,
+        key_broker: Any | None = None,
+    ) -> None:
         self.db = db
         self.storage_root = storage_root.resolve()
         self.runner = runner or SubprocessRunner()
+        self.key_broker = key_broker
 
     def package(
         self,
@@ -163,6 +171,17 @@ class MediaPackagingService:
                 f"captions_{language}_$Number$.vtt,playlist_name=captions_{language}.m3u8,hls_group_id=text,"
                 f"hls_name={caption['label']},lang={language}"
             )
+        content_key = self.key_broker.get_or_create(asset_id) if self.key_broker else None
+        if content_key:
+            packager.extend(
+                [
+                    "--enable_raw_key_encryption",
+                    "--keys",
+                    f"label=:key_id={content_key['kid_hex']}:key={content_key['key_hex']}",
+                    "--protection_scheme",
+                    "cenc",
+                ]
+            )
         packager.extend(
             [
                 "--segment_duration", "4",
@@ -182,6 +201,15 @@ class MediaPackagingService:
             "renditions": [rendition.height for rendition in renditions],
             "captions": packaged_captions,
             "thumbnail_interval_seconds": 10,
+            "encryption": (
+                {
+                    "type": "development-clear-key",
+                    "scheme": "cenc",
+                    "kid": content_key["kid"],
+                }
+                if content_key
+                else None
+            ),
             "processing_seconds": round(time.perf_counter() - started, 3),
             "output_bytes": output_bytes,
             "worker_host": {

@@ -14,7 +14,7 @@ from app.services.learning import (
 
 
 class StaticSigner:
-    def authorize(self, playback_id: str, lesson_duration_seconds: float):
+    def authorize(self, playback_id: str, lesson_duration_seconds: float, playback_session_id=None):
         return {"playback_id": playback_id, "manifest_url": "https://signed.example.test/manifest"}
 
 
@@ -140,6 +140,12 @@ def test_playback_rotates_session_and_returns_resume_and_pending_state(service_c
     assert db.lesson_progress.find_one({"user_id": user.id, "lesson_id": "l1"})[
         "playback_session_id"
     ] == second["playback_session_id"]
+    active = db.playback_sessions.find_one({"id": second["playback_session_id"]})
+    previous = db.playback_sessions.find_one({"id": first["playback_session_id"]})
+    assert active["status"] == "active"
+    assert active["user_id"] == user.id
+    assert active["lesson_id"] == "l1"
+    assert previous["status"] == "rotated"
 
 
 def test_progress_rejects_missing_or_rotated_session(service_context):

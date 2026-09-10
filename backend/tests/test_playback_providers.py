@@ -16,7 +16,7 @@ class CapturingProvider:
     def __init__(self):
         self.asset = None
 
-    def authorize(self, asset, lesson_duration_seconds):
+    def authorize(self, asset, lesson_duration_seconds, playback_session_id=None):
         self.asset = asset
         return {"manifest_url": "https://example.test/manifest.m3u8", "expires_at": "2099-01-01T00:00:00+00:00"}
 
@@ -48,26 +48,46 @@ def test_development_provider_is_refused_outside_development():
     provider = DevelopmentPlaybackProvider(environment="production")
 
     with pytest.raises(PlaybackProviderUnavailable, match="development"):
-        provider.authorize({"id": "asset-1"}, lesson_duration_seconds=60)
+        provider.authorize({"id": "asset-1"}, lesson_duration_seconds=60, playback_session_id="session-1")
 
 
 def test_development_provider_returns_the_neutral_local_contract_in_development():
-    provider = DevelopmentPlaybackProvider(environment="development")
+    provider = DevelopmentPlaybackProvider(
+        environment="development", media_base_url="http://127.0.0.1:8000"
+    )
 
     authorization = provider.authorize(
-        {"id": "asset-1", "source_provider": "local"},
+        {
+            "id": "asset-1",
+            "source_provider": "local",
+            "state": "ready",
+            "published_generation_id": "generation-1",
+        },
         lesson_duration_seconds=60,
+        playback_session_id="session-1",
     )
 
     assert authorization["provider"] == "local"
     assert authorization["media_asset_id"] == "asset-1"
-    assert authorization["drm"] == {"type": "development-clear-key"}
-    assert authorization["manifest_url"] == "/media/assets/asset-1/manifest.m3u8"
+    assert authorization["drm"] == {
+        "type": "development-clear-key",
+        "license_url": "http://127.0.0.1:8000/media/playback-sessions/session-1/clearkey",
+    }
+    assert authorization["manifest_url"] == "http://127.0.0.1:8000/media/playback-sessions/session-1/manifest.mpd"
+    assert authorization["expires_at"] != "2099-01-01T00:00:00+00:00"
 
     with pytest.raises(PlaybackProviderUnavailable, match="local asset"):
         provider.authorize(
             {"id": "mux-asset", "source_provider": "mux"},
             lesson_duration_seconds=60,
+            playback_session_id="session-1",
+        )
+
+    with pytest.raises(PlaybackProviderUnavailable, match="published generation"):
+        provider.authorize(
+            {"id": "asset-1", "source_provider": "local", "state": "ready"},
+            lesson_duration_seconds=60,
+            playback_session_id="session-1",
         )
 
 

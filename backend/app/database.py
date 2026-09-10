@@ -65,6 +65,24 @@ def init_db() -> None:
             {"unique": True, "name": "media_generation_id_unique"},
         ),
         (
+            "media_content_key_asset_unique",
+            db.media_content_keys,
+            "asset_id",
+            {"unique": True, "name": "media_content_key_asset_unique"},
+        ),
+        (
+            "playback_session_id_unique",
+            db.playback_sessions,
+            "id",
+            {"unique": True, "name": "playback_session_id_unique"},
+        ),
+        (
+            "playback_session_expiry",
+            db.playback_sessions,
+            "expires_at",
+            {"expireAfterSeconds": 0, "name": "playback_session_expiry"},
+        ),
+        (
             "processing_jobs_state_lease",
             db.processing_jobs,
             [("state", pymongo.ASCENDING), ("lease_expires_at", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)],

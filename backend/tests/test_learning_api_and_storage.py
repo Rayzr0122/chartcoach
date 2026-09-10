@@ -23,7 +23,7 @@ from app.services.playback_providers import MuxPlaybackProvider
 
 
 class StaticSigner:
-    def authorize(self, playback_id: str, lesson_duration_seconds: float):
+    def authorize(self, playback_id: str, lesson_duration_seconds: float, playback_session_id=None):
         return {
             "playback_id": playback_id,
             "manifest_url": "https://stream.example.test/signed.m3u8",
@@ -127,6 +127,9 @@ def test_init_db_creates_learning_unique_and_query_indexes(monkeypatch):
     assert db.media_assets.index_information()["media_asset_id_unique"]["unique"] is True
     assert db.media_assets.index_information()["media_source_checksum_unique"]["unique"] is True
     assert db.media_generations.index_information()["media_generation_id_unique"]["unique"] is True
+    assert db.media_content_keys.index_information()["media_content_key_asset_unique"]["unique"] is True
+    assert db.playback_sessions.index_information()["playback_session_id_unique"]["unique"] is True
+    assert "playback_session_expiry" in db.playback_sessions.index_information()
     assert "processing_jobs_state_lease" in db.processing_jobs.index_information()
     assert db.enrollments.index_information()["user_course_unique"]["unique"] is True
     assert db.lesson_progress.index_information()["user_lesson_unique"]["unique"] is True

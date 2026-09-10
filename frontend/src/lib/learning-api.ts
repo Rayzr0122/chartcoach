@@ -1,3 +1,7 @@
+import { resolveApiUrl } from "./api";
+
+const API_URL = resolveApiUrl(process.env.NEXT_PUBLIC_API_URL);
+
 export type LessonProgress = {
   user_id: string;
   lesson_id: string;
@@ -38,7 +42,10 @@ export type LessonMetadata = {
 export type PlaybackAuthorization = {
   provider?: "mux" | "local";
   media_asset_id?: string;
-  drm?: { type: "mux" | "development-clear-key" };
+  drm?: {
+    type: "mux" | "development-clear-key";
+    license_url?: string;
+  };
   playback_session_id: string;
   resume_position_seconds: number;
   pending_prompt_id: string | null;
@@ -88,7 +95,7 @@ async function request<T>(
 ): Promise<T> {
   try {
     const response = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL ?? ""}/learning/lessons/${path}`,
+      `${API_URL}/learning/lessons/${path}`,
       {
         method,
         credentials: "include",

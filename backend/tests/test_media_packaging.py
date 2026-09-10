@@ -14,6 +14,17 @@ class Runner:
         self.commands.append(command)
 
 
+class KeyBroker:
+    def get_or_create(self, asset_id):
+        assert asset_id == "asset-1"
+        return {
+            "kid_hex": "00112233445566778899aabbccddeeff",
+            "key_hex": "ffeeddccbbaa99887766554433221100",
+            "kid": "ABEiM0RVZneImaq7zN3u_w",
+            "key": "_-7dzLuqmYh3ZlVEMyIRAA",
+        }
+
+
 def test_rendition_plan_never_upscales_and_uses_expected_ladder():
     assert [item.height for item in plan_renditions(1080)] == [360, 720, 1080]
     assert [item.height for item in plan_renditions(700)] == [360]
@@ -100,3 +111,33 @@ def test_generation_id_cannot_escape_the_output_root(tmp_path):
         MediaPackagingService(db, tmp_path).package(
             "asset-1", generation_id="../escape", validate=lambda _: True
         )
+
+
+def test_encrypted_generation_uses_cenc_without_persisting_plaintext_key(tmp_path):
+    db = mongomock.MongoClient().chartcoach
+    db.media_assets.insert_one(
+        {
+            "id": "asset-1",
+            "source_key": "sources/source.mp4",
+            "state": "ready_for_encoding",
+            "streams": [{"codec_type": "video", "height": 360}],
+        }
+    )
+    runner = Runner()
+
+    generation = MediaPackagingService(
+        db, tmp_path, runner=runner, key_broker=KeyBroker()
+    ).package("asset-1", generation_id="encrypted-1", validate=lambda _: True)
+
+    packager = runner.commands[-1]
+    assert "--enable_raw_key_encryption" in packager
+    assert "--protection_scheme" in packager
+    assert "cenc" in packager
+    assert any("key_id=00112233445566778899aabbccddeeff" in part for part in packager)
+    assert any("key=ffeeddccbbaa99887766554433221100" in part for part in packager)
+    assert generation["encryption"] == {
+        "type": "development-clear-key",
+        "scheme": "cenc",
+        "kid": "ABEiM0RVZneImaq7zN3u_w",
+    }
+    assert "ffeeddccbbaa99887766554433221100" not in repr(db.media_generations.find_one())

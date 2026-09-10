@@ -28,6 +28,10 @@ class Settings(BaseSettings):
 
     app_environment: str = "development"
     playback_provider: str = "mux"
+    media_base_url: str = "http://127.0.0.1:8000"
+    local_playback_session_minutes: int = 15
+    local_media_wrapping_secret: str | None = None
+    media_root: str = "../.media"
 
     # Mux signing is optional so unrelated APIs can start without video credentials.
     mux_signing_key_id: str | None = None

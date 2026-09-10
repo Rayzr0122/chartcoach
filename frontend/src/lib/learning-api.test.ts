@@ -50,6 +50,7 @@ it("sends cookie-authenticated lesson requests and exact progress/attempt payloa
     "PUT",
     "POST",
   ]);
+  expect(requests[0].url).toBe("http://localhost:8000/learning/lessons/l1");
   expect(requests[1].url).toMatch(/\/lessons\/l1\/playback-sessions$/);
   expect(requests[2].url).toMatch(/\/lessons\/l1\/playback-sessions\/s\/renew$/);
   expect(JSON.parse(requests[3].init.body as string)).toEqual({

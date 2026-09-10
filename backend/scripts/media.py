@@ -18,6 +18,7 @@ from app.services.media_ingest import (
     ProcessingJobWorker,
 )
 from app.services.media_packaging import MediaPackagingService, validate_generation
+from app.services.media_keys import DevelopmentKeyBroker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     package_command = commands.add_parser("package", help="Create an adaptive package generation")
     package_command.add_argument("asset_id")
     package_command.add_argument("--generation", required=True)
+    package_command.add_argument("--encrypt", action="store_true")
     caption_command = commands.add_parser("caption", help="Attach a timed-text source to an asset")
     caption_command.add_argument("asset_id")
     caption_command.add_argument("source")
@@ -89,7 +91,18 @@ def main() -> None:
             if not worked:
                 time.sleep(2)
     else:
-        generation = MediaPackagingService(db, Path(args.media_root)).package(
+        key_broker = (
+            DevelopmentKeyBroker(
+                db,
+                environment=os.getenv("APP_ENVIRONMENT", "development"),
+                wrapping_secret=os.getenv("LOCAL_MEDIA_WRAPPING_SECRET"),
+            )
+            if args.encrypt
+            else None
+        )
+        generation = MediaPackagingService(
+            db, Path(args.media_root), key_broker=key_broker
+        ).package(
             args.asset_id,
             generation_id=args.generation,
             validate=validate_generation,
