@@ -46,6 +46,12 @@ export type PlaybackAuthorization = {
     type: "mux" | "development-clear-key";
     license_url?: string;
   };
+  watermark?: {
+    mode: "server";
+    visible_text: string;
+    segment_duration_seconds: 10;
+    forensic_algorithm: string;
+  };
   playback_session_id: string;
   resume_position_seconds: number;
   pending_prompt_id: string | null;

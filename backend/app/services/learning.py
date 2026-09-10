@@ -5,6 +5,9 @@ from typing import Any
 from uuid import uuid4
 
 from app.domain.learning import Lesson, ProgressError, normalize_progress, validate_progress_observation
+from app.config import settings
+from app.services.playback_providers import PlaybackProviderUnavailable
+from app.services.watermarking import build_watermark_identity
 
 
 class LessonNotFound(RuntimeError):
@@ -153,6 +156,18 @@ class LearningService:
             }
         session_id = uuid4().hex
         capabilities = self.playback_provider.authorize(asset, lesson.duration_seconds, session_id)
+        watermark_mode = settings.watermark_mode.lower()
+        watermark = None
+        if watermark_mode == "server":
+            if not settings.watermark_secret or not settings.watermark_renderer_enabled:
+                raise PlaybackProviderUnavailable("Server-side watermarking is not ready")
+            watermark = build_watermark_identity(user.email, session_id, settings.watermark_secret)
+            capabilities["watermark"] = {
+                "mode": "server",
+                "visible_text": watermark["visible_text"],
+                "segment_duration_seconds": 10,
+                "forensic_algorithm": watermark["algorithm"],
+            }
         now = datetime.now(timezone.utc)
         try:
             expires_at = datetime.fromisoformat(str(capabilities["expires_at"]).replace("Z", "+00:00"))
@@ -177,6 +192,9 @@ class LearningService:
                 "status": "active",
                 "created_at": now,
                 "expires_at": expires_at,
+                "watermark_mode": watermark_mode,
+                "watermark_visible_text": watermark["visible_text"] if watermark else None,
+                "watermark_forensic_id": watermark["forensic_id"] if watermark else None,
             }
         )
         progress = self._normalized_progress(

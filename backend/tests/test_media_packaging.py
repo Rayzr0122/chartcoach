@@ -62,7 +62,7 @@ def test_generation_is_published_only_after_all_commands_and_validation(tmp_path
     assert db.media_assets.find_one({"id": "asset-1"})["published_generation_id"] == "generation-1"
     ffmpeg = runner.commands[0]
     assert "-force_key_frames" in ffmpeg
-    assert "expr:gte(t,n_forced*4)" in ffmpeg
+    assert "expr:gte(t,n_forced*10)" in ffmpeg
     assert any("fps=1/10" in part for command in runner.commands for part in command)
     assert any("captions_hi.vtt" in part for command in runner.commands for part in command)
     packager = runner.commands[-1]
@@ -74,6 +74,8 @@ def test_generation_is_published_only_after_all_commands_and_validation(tmp_path
     assert "segment_template=" in text_descriptor
     assert ",output=" not in text_descriptor
     assert "--generate_static_live_mpd" in packager
+    segment_index = packager.index("--segment_duration")
+    assert packager[segment_index + 1] == "10"
     assert any("@sha256:" in part for command in runner.commands for part in command if "ffmpeg" in part or "packager" in part)
     db.media_assets.update_one({"id": "asset-1"}, {"$set": {"state": "ready_for_encoding"}})
     with pytest.raises(ValueError, match="already exists"):

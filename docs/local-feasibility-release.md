@@ -54,3 +54,13 @@ Before a credentialed release, retain physical-device evidence for Windows,
 Android, macOS, iPhone, and iPad: packaging, license exchange, renewal, expiry,
 captions, speed changes, seeking, fullscreen, foreground/background behavior,
 and player remounting. Development Clear Key results do not satisfy that gate.
+
+## Watermarking guardrail
+
+Packaging uses aligned 10-second media segments. Production watermarking is
+fail-closed: set `WATERMARK_MODE=server`, provide a dedicated
+`WATERMARK_SECRET`, and enable the deployed server-side renderer before issuing
+playback sessions. Until that renderer is present, production authorization is
+refused rather than serving unwatermarked media. The session identity primitive
+uses a masked visible label plus a session-bound HMAC forensic identifier; the
+forensic renderer must embed both into clear media before CENC encryption.

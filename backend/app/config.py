@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     local_playback_session_minutes: int = 15
     local_media_wrapping_secret: str | None = None
     media_root: str = "../.media"
+    # Production must select a real server-side renderer. The local proof keeps
+    # this disabled so existing Clear Key fixtures remain playable.
+    watermark_mode: str = "disabled"
+    watermark_secret: str | None = None
+    watermark_startup_budget_seconds: int = 5
+    watermark_renderer_enabled: bool = False
 
     # Mux signing is optional so unrelated APIs can start without video credentials.
     mux_signing_key_id: str | None = None

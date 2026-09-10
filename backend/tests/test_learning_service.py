@@ -11,6 +11,8 @@ from app.services.learning import (
     PlaybackSessionMismatch,
     PromptNotReady,
 )
+from app.services.playback_providers import PlaybackProviderUnavailable
+from app.config import settings
 
 
 class StaticSigner:
@@ -257,3 +259,13 @@ def test_progress_completes_only_after_coverage_and_required_prompt_pass(service
     assert last["watched_seconds"] == 90.0
     assert last["completed"] is True
     assert last["completed_at"] is not None
+
+
+def test_production_watermark_mode_fails_closed_without_renderer(service_context, monkeypatch):
+    _, user, service = service_context
+    monkeypatch.setattr(settings, "watermark_mode", "server")
+    monkeypatch.setattr(settings, "watermark_secret", "watermark-secret")
+    monkeypatch.setattr(settings, "watermark_renderer_enabled", False)
+
+    with pytest.raises(PlaybackProviderUnavailable, match="watermarking is not ready"):
+        service.start_playback("l1", user)

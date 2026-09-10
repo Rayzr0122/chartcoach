@@ -10,7 +10,7 @@ python -m scripts.media package asset-id --generation generation-id
 ```
 
 The pipeline creates H.264/AAC renditions at 360p, 720p, and 1080p when the
-source resolution permits them. It never upscales. Four-second keyframes and
+source resolution permits them. It never upscales. Ten-second keyframes and
 segments are aligned across renditions. Shaka Packager emits both HLS and DASH,
 including segmented WebVTT captions, and FFmpeg creates a 320-pixel thumbnail
 every ten seconds. A generation is published only when both manifests,

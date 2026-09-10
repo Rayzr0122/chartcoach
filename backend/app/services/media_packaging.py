@@ -116,7 +116,7 @@ class MediaPackagingService:
                     "-c:v", "libx264", "-preset", "medium", "-profile:v", "high",
                     "-b:v", rendition.video_bitrate, "-maxrate", rendition.video_bitrate,
                     "-bufsize", rendition.video_bitrate, "-sc_threshold", "0",
-                    "-force_key_frames", "expr:gte(t,n_forced*4)",
+                    "-force_key_frames", "expr:gte(t,n_forced*10)",
                     "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-movflags", "+faststart",
                     output,
                 ]
@@ -184,7 +184,7 @@ class MediaPackagingService:
             )
         packager.extend(
             [
-                "--segment_duration", "4",
+                "--segment_duration", "10",
                 "--generate_static_live_mpd",
                 "--mpd_output", f"/media/outputs/{asset_id}/{generation_id}/package/manifest.mpd",
                 "--hls_master_playlist_output", f"/media/outputs/{asset_id}/{generation_id}/package/master.m3u8",
