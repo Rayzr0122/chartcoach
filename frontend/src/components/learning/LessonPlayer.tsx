@@ -3,6 +3,7 @@ import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import LessonTranscript from "./LessonTranscript";
 import LessonChat from "./LessonChat";
+import LessonTour from "./LessonTour";
 import * as learningApi from "@/lib/learning-api";
 import type {
   LessonMetadata,
@@ -29,6 +30,7 @@ type Props = {
   onUnauthorized: () => void;
   onRetry?: () => void;
   previewMode?: boolean;
+  tourStorageKey?: string;
 };
 export default function LessonPlayer({
   lesson,
@@ -38,6 +40,7 @@ export default function LessonPlayer({
   onUnauthorized,
   onRetry,
   previewMode = false,
+  tourStorageKey,
 }: Props) {
   const video = useRef<HTMLVideoElement>(null),
     container = useRef<HTMLDivElement>(null),
@@ -47,7 +50,8 @@ export default function LessonPlayer({
   const seekTo = useCallback((seconds: number) => controller.current?.seek(seconds), []);
   const [view, setView] = useState<LessonView | null>(null);
   const [expanded, setExpanded] = useState(false),
-    [preview, setPreview] = useState<LessonSegment | null>(null);
+    [preview, setPreview] = useState<LessonSegment | null>(null),
+    [speedNotice, setSpeedNotice] = useState(false);
   useEffect(() => {
     const element = video.current!;
     const instance = new LessonController(
@@ -77,6 +81,7 @@ export default function LessonPlayer({
   const prompt = view?.prompt;
   const warning = view?.seekWarning;
   const seekNotice = view?.seekNotice;
+  const seekBlocked = view?.seekBlocked;
   const modalOpen = Boolean(prompt || warning);
   useEffect(() => {
     if (!seekNotice) return;
@@ -86,6 +91,16 @@ export default function LessonPlayer({
     );
     return () => window.clearTimeout(timeout);
   }, [seekNotice]);
+  useEffect(() => {
+    if (!seekBlocked) return;
+    const timeout = window.setTimeout(() => controller.current?.dismissSeekBlocked(), 4500);
+    return () => window.clearTimeout(timeout);
+  }, [seekBlocked]);
+  useEffect(() => {
+    if (!speedNotice) return;
+    const timeout = window.setTimeout(() => setSpeedNotice(false), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [speedNotice]);
   useEffect(() => {
     if (prompt || warning) {
       dialog.current
@@ -151,7 +166,8 @@ export default function LessonPlayer({
     >
       <div className={styles.mediaColumn}>
       <div
-        className={styles.player}
+      className={styles.player}
+        data-tour-target="player"
         role="region"
         aria-label="Lesson video"
         tabIndex={0}
@@ -185,13 +201,13 @@ export default function LessonPlayer({
           )}
         </div>
         <div className={styles.controls} inert={modalOpen}>
-          <div className={styles.timeline}>
+          <div className={styles.timeline} data-tour-target="seek">
             <input
               type="range"
               aria-label="Playback position"
-              title="Seek backward / forward (← / →)"
+              title="You can seek backward to review; forward seeking is disabled"
               min={0}
-              max={lesson.duration_seconds}
+              max={position}
               step={0.1}
               value={position}
               onChange={(e) => controller.current?.seek(Number(e.target.value))}
@@ -199,6 +215,7 @@ export default function LessonPlayer({
                 background: `linear-gradient(to right, #ff167d ${(position / lesson.duration_seconds) * 100}%, #ffffff40 0)`,
               }}
             />
+            <span className={styles.seekHint}>Forward seeking is disabled so progress and required questions count.</span>
             <div className={styles.markers}>
               {lesson.segments.map((segment) => (
                 <button
@@ -295,7 +312,7 @@ export default function LessonPlayer({
             <span className={styles.clock}>
               {time(position)} / {time(lesson.duration_seconds)}
             </span>
-            <select className={styles.speed} aria-label="Playback speed" title="Playback speed" value={s?.playbackRate ?? 1} disabled={!view?.ready} onChange={(event) => controller.current?.setPlaybackRate(Number(event.target.value))}>
+            <select className={styles.speed} aria-label="Playback speed" title="Playback speed" value={s?.playbackRate ?? 1} disabled={!view?.ready} onChange={(event) => { const rate = Number(event.target.value); controller.current?.setPlaybackRate(rate); setSpeedNotice(rate >= 1.75); }}>
               {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
             </select>
             <button
@@ -380,13 +397,28 @@ export default function LessonPlayer({
             </li>
           ))}
         </ol>
-        <p className={styles.progress} aria-live="polite">
+        <p data-tour-target="progress" className={styles.progress} aria-live="polite">
           {view?.progress.completed
             ? "Lesson complete"
             : `${Math.round(view?.progress.watch_percent ?? 0)}% watched · Progress saved as you learn`}
         </p>
       </aside>
       </div>
+      {tourStorageKey && <LessonTour storageKey={tourStorageKey} />}
+      {seekBlocked && !modalOpen && (
+        <div className={styles.seekNotice} role="status" aria-label="Forward seeking unavailable">
+          <div><strong>Forward seeking unavailable</strong></div>
+          <p>Watch the lesson in sequence so progress and required questions count. You can seek backward anytime.</p>
+          <button type="button" aria-label="Dismiss forward seeking notice" onClick={() => controller.current?.dismissSeekBlocked()}>×</button>
+        </div>
+      )}
+      {speedNotice && !modalOpen && (
+        <div className={styles.seekNotice} role="status" aria-label="Playback speed reminder">
+          <div><strong>Fast playback reminder</strong></div>
+          <p>At 1.75× or 2×, this may make it harder to absorb the lesson and retain key ideas.</p>
+          <button type="button" aria-label="Dismiss playback speed reminder" onClick={() => setSpeedNotice(false)}>×</button>
+        </div>
+      )}
       {seekNotice && !modalOpen && (
         <div className={styles.seekNotice} role="status" aria-label="Skip reminder">
           <div>

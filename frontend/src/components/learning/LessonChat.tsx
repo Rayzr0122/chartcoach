@@ -62,7 +62,7 @@ export default function LessonChat({ lessonId, position, onSeek }: { lessonId: s
     void sendMessage({ text: text.trim() }, { body: { lessonId, position } });
     setInput("");
   }
-  return <section className={styles.chat} aria-label="Lesson assistant">
+  return <section data-tour-target="chat" className={styles.chat} aria-label="Lesson assistant">
     <header className={styles.panelHeader}><div><h2>Ask ChartCoach</h2><p>About this lecture · {transcriptTime(position)}</p></div><span className={styles.badge}>{connected ? "Connected" : connected === null ? "Checking…" : "Not connected"}</span></header>
     <Conversation className={styles.conversation}><ConversationContent className={styles.messages}>
       {!messages.length && <div className={styles.empty}>

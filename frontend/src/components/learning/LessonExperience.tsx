@@ -110,6 +110,7 @@ export default function LessonExperience({
               factory={factory}
               onUnauthorized={unauthorized}
               onRetry={retryPlayback}
+              tourStorageKey={`chartcoach-lesson-tour-${user.email}`}
             />
           </>
         ) : (

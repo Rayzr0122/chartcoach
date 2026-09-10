@@ -11,13 +11,13 @@ import {
   FakePlayer,
 } from "@/test/lesson-fixtures";
 afterEach(() => vi.useRealTimers());
-async function seekFixture(passed = true) {
+async function seekFixture(passed = true, start = 0) {
   vi.useFakeTimers();
   const player = new FakePlayer();
   const saved = { ...progress, passed_prompt_ids: passed ? ["q1"] : [] };
   let view: LessonView;
   const controller = new LessonController(
-    { ...lesson, progress: saved }, authorization, player,
+    { ...lesson, progress: saved }, { ...authorization, resume_position_seconds: start }, player,
     {
       getLesson: async () => ({ ...lesson, progress: saved }),
       authorizePlayback: async () => authorization,
@@ -29,73 +29,34 @@ async function seekFixture(passed = true) {
   await controller.start();
   return { controller, player, view: () => view! };
 }
-it("keeps playback moving for three gentle seek reminders, then pauses on the fourth", async () => {
+it("blocks forward seeking and keeps the playhead at the watched position", async () => {
   const f = await seekFixture();
   await f.controller.togglePlay();
-  for (let reminder = 1; reminder <= 3; reminder++) {
-    f.controller.seek(30);
-    expect(f.view().seekNotice).toBe(reminder);
-    expect(f.view().seekWarning).toBe(false);
-    expect(f.player.snapshot().paused).toBe(false);
-    f.controller.seek(0);
-  }
   f.controller.seek(30);
-  expect(f.view().seekWarning).toBe(true);
-  expect(f.view().seekNotice).toBeNull();
-  expect(f.player.snapshot().paused).toBe(true);
-  await f.controller.togglePlay();
-  expect(f.player.snapshot().paused).toBe(true);
-  await f.controller.acknowledgeSeekWarning();
-  expect(f.view().seekWarning).toBe(false);
-  expect(f.player.snapshot().paused).toBe(false);
+  expect(f.player.snapshot().position).toBe(0);
+  expect(f.view().seekBlocked).toBe(true);
   f.controller.destroy();
 });
-it("starts a fresh three-reminder cycle after the blocking warning is acknowledged", async () => {
-  const f = await seekFixture();
-  for (let count = 0; count < 4; count++) {
-    f.controller.seek(30);
-    if (count < 3) f.controller.seek(0);
-  }
-  expect(f.view().seekWarning).toBe(true);
-  await f.controller.acknowledgeSeekWarning();
-  expect(f.view().seekWarning).toBe(false);
-  expect(f.player.snapshot().paused).toBe(false);
-
-  f.controller.seek(0);
+it("still permits backward review without showing a forward-seek warning", async () => {
+  const f = await seekFixture(true, 30);
   f.controller.seek(60);
-  expect(f.view().seekNotice).toBe(1);
-  expect(f.view().seekWarning).toBe(false);
-  expect(f.player.snapshot().paused).toBe(false);
+  f.controller.seek(10);
+  expect(f.player.snapshot().position).toBe(10);
+  expect(f.view().seekBlocked).toBe(false);
   f.controller.destroy();
 });
-it("counts repeated small forward seeks as a gentle reminder and ignores backward review", async () => {
+it("snaps external forward seeks back to the last watched position", async () => {
   const f = await seekFixture();
-  f.controller.seek(5);
-  f.controller.seek(0);
-  f.controller.seek(5);
-  expect(f.view().seekWarning).toBe(false);
-  f.controller.seek(10);
-  expect(f.view().seekNotice).toBe(1);
-  expect(f.view().seekWarning).toBe(false);
-  f.controller.destroy();
-});
-it("expires old seeks and detects external media seeks", async () => {
-  const f = await seekFixture();
-  f.controller.seek(5);
-  await vi.advanceTimersByTimeAsync(120001);
-  f.controller.seek(10);
-  f.controller.seek(15);
-  expect(f.view().seekWarning).toBe(false);
   f.player.seek(50);
-  expect(f.view().seekNotice).toBe(1);
-  expect(f.view().seekWarning).toBe(false);
+  expect(f.player.snapshot().position).toBe(0);
+  expect(f.view().seekBlocked).toBe(true);
   f.controller.destroy();
 });
-it("keeps unanswered question gates ahead of seek warnings", async () => {
+it("does not bypass an unanswered question through forward seeking", async () => {
   const f = await seekFixture(false);
   f.controller.seek(50);
-  expect(f.view().prompt?.id).toBe("q1");
-  expect(f.view().seekWarning).toBe(false);
+  expect(f.view().prompt).toBeNull();
+  expect(f.view().seekBlocked).toBe(true);
   f.controller.destroy();
 });
 it("keeps heartbeats running after authorization recovery during initial load", async () => {

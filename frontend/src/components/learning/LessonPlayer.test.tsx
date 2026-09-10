@@ -25,31 +25,16 @@ it("changes playback speed without changing the playback position", async () => 
   fireEvent.change(speed, { target: { value: "2" } });
   expect(player.snapshot().playbackRate).toBe(2);
   expect(player.snapshot().position).toBe(position);
+  expect(screen.getByRole("status", { name: "Playback speed reminder" })).toHaveTextContent("may make it harder to absorb the lesson");
   fireEvent.change(speed, { target: { value: "0.5" } });
   expect(player.snapshot().playbackRate).toBe(0.5);
 });
-it("shows three non-blocking reminders before the focused pause warning", async () => {
+it("explains and blocks forward timeline seeking", async () => {
   const { player } = setup({ passed_prompt_ids: ["q1"] });
-  const play = await screen.findByRole("button", { name: "Play" });
-  await waitFor(() => expect(play).toBeEnabled());
-  await userEvent.click(play);
-  expect(player.snapshot().paused).toBe(false);
   const timeline = screen.getByRole("slider", { name: "Playback position" });
-  for (let reminder = 1; reminder <= 3; reminder++) {
-    fireEvent.change(timeline, { target: { value: "35" } });
-    expect(screen.getByRole("status", { name: "Skip reminder" })).toHaveTextContent(`Reminder ${reminder} of 3`);
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(player.snapshot().paused).toBe(false);
-    fireEvent.change(timeline, { target: { value: "0" } });
-  }
   fireEvent.change(timeline, { target: { value: "35" } });
-  const dialog = await screen.findByRole("alertdialog");
-  const resume = within(dialog).getByRole("button", { name: "Continue watching" });
-  expect(resume).toHaveFocus();
-  expect(player.snapshot().paused).toBe(true);
-  await userEvent.click(resume);
-  await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
-  expect(player.snapshot().paused).toBe(false);
+  expect(timeline).toHaveAttribute("title", "You can seek backward to review; forward seeking is disabled");
+  expect(player.snapshot().position).toBe(0);
 });
 function setup(
   overrides: Partial<typeof progress> = {},
@@ -174,8 +159,8 @@ it("shows chapter preview, highlights active chapter, and allows backward seekin
   await userEvent.click(screen.getByRole("button", { name: /Chapter 1/ }));
   expect(screen.getByLabelText("Playback position")).toHaveValue("0");
 });
-it.each(["timeline", "chapter", "keyboard", "native", "natural"])(
-  "stops %s forward movement at the required check",
+it.each(["timeline", "chapter", "keyboard", "native"])(
+  "blocks %s forward seeking before the required check",
   async (entry) => {
     const t = setup();
     await screen.findByRole("button", { name: "Play" });
@@ -193,21 +178,18 @@ it.each(["timeline", "chapter", "keyboard", "native", "natural"])(
     }
     if (entry === "native")
       act(() => t.player.emit("seeking", { position: 50 }));
-    if (entry === "natural")
-      act(() => t.player.emit("timeupdate", { position: 21, paused: false }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent(
-      "Which point is the swing high?",
-    );
-    expect(t.player.state.position).toBe(20);
-    expect(t.player.state.paused).toBe(true);
-    await waitFor(() =>
-      expect(t.observations.at(-1)?.position_seconds).toBe(20),
-    );
-    expect(
-      t.observations.every((x) => x.end_seconds - x.start_seconds <= 15),
-    ).toBe(true);
+    expect(t.player.state.position).toBe(entry === "keyboard" ? 18 : entry === "native" ? 0 : 0);
+    expect(screen.getByLabelText("Playback position")).toHaveAttribute("title", "You can seek backward to review; forward seeking is disabled");
   },
 );
+it("opens the required question when playback naturally reaches its boundary", async () => {
+  const t = setup();
+  await screen.findByRole("button", { name: "Play" });
+  act(() => t.player.emit("timeupdate", { position: 21, paused: false }));
+  expect(await screen.findByRole("dialog")).toHaveTextContent("Which point is the swing high?");
+  expect(t.player.state.position).toBe(20);
+  expect(t.player.state.paused).toBe(true);
+});
 it("restores pending check with focus, retries wrong answers, and continues only on learner action", async () => {
   const t = setup({ resume_position_seconds: 20, pending_prompt_id: "q1" });
   const dialog = await screen.findByRole("dialog");
@@ -314,11 +296,8 @@ it("does not credit a native jump as watched coverage", async () => {
   await screen.findByRole("button", { name: "Play" });
   act(() => t.player.emit("timeupdate", { position: 10, paused: false }));
   await act(async () => t.player.emit("seeking", { position: 40 }));
-  expect(t.observations.at(-1)).toMatchObject({
-    position_seconds: 20,
-    start_seconds: 20,
-    end_seconds: 20,
-  });
+  expect(t.player.state.position).toBe(10);
+  expect(screen.getByLabelText("Playback position")).toHaveAttribute("title", "You can seek backward to review; forward seeking is disabled");
 });
 it("restores authoritative position after server rejection", async () => {
   const t = setup();
@@ -328,7 +307,7 @@ it("restores authoritative position after server rejection", async () => {
   };
   await act(async () => t.player.emit("seeking", { position: 40 }));
   expect(t.player.state.position).toBe(0);
-  expect(within(screen.getByRole("region", { name: "Lesson video" })).getByRole("alert")).toHaveTextContent(/refreshed/i);
+  expect(screen.getByRole("status", { name: "Forward seeking unavailable" })).toHaveTextContent(/progress and required questions count/i);
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 it("keeps recovery reachable when a server error restores a pending prompt", async () => {
