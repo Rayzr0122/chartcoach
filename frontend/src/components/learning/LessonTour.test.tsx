@@ -35,3 +35,19 @@ it("reopens the guide when requested after dismissal", async () => {
   view.rerender(<LessonTour storageKey="chartcoach-tour-test" openRequest={1} />);
   expect(await screen.findByRole("dialog", { name: "Lesson player guide" })).toBeVisible();
 });
+
+it("lets learners move back to the previous tutorial step", async () => {
+  const user = userEvent.setup();
+  render(
+    <div>
+      <button data-tour-target="player">Player</button>
+      <button data-tour-target="seek">Seek</button>
+      <LessonTour storageKey="chartcoach-tour-test" />
+    </div>,
+  );
+  await user.click(screen.getByRole("button", { name: "Next" }));
+  expect(screen.getByText("Your watched range")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Previous" }));
+  expect(screen.getByText("Meet your lesson player")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Previous" })).not.toBeInTheDocument();
+});

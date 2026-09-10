@@ -76,7 +76,12 @@ export default function LessonTour({ storageKey, openRequest = 0 }: Props) {
         <h2 className="text-lg font-semibold tracking-tight">{step.title}</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">{step.body}</p>
         <div className="mt-5 flex items-center justify-between gap-3">
-          <button type="button" className="text-xs font-medium text-slate-500 hover:text-slate-900" onClick={() => finish("dismissed")}>Skip tour</button>
+          <div className="flex items-center gap-3">
+            {stepIndex > 0 && (
+              <button type="button" className="text-xs font-medium text-slate-500 hover:text-slate-900" onClick={() => setStepIndex(stepIndex - 1)}>Previous</button>
+            )}
+            <button type="button" className="text-xs font-medium text-slate-500 hover:text-slate-900" onClick={() => finish("dismissed")}>Skip tour</button>
+          </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-slate-400">{stepIndex + 1} / {steps.length}</span>
             <button type="button" className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700" onClick={next}>{stepIndex === steps.length - 1 ? "Done" : "Next"}</button>
