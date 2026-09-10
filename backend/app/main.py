@@ -3,15 +3,29 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api import auth, face, monitor, users
+from app.api import auth, courses, face, monitor, users
+from app.api.v1 import (
+    courses as courses_v1,
+    dashboard as dashboard_v1,
+    learning as learning_v1,
+    market as market_v1,
+)
 from app.config import settings
 from app.core.face_engine import load_face_app
 from app.core.rate_limit import limiter
+from app.core.errors import (
+    AppError,
+    app_error_handler,
+    http_exception_handler,
+    validation_exception_handler,
+    generate_request_id,
+)
 from app.database import init_db
 
 
@@ -27,10 +41,20 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ChartCoach API", version="0.1.0", lifespan=lifespan)
 
-# Wire up rate limiting: sends a friendly 429 response instead of a crash
-# once a client goes over the limit on a decorated route
+# Correlation ID middleware
+@app.middleware("http")
+async def correlation_id_middleware(request, call_next):
+    request.state.request_id = request.headers.get("x-request-id") or generate_request_id()
+    response = await call_next(request)
+    response.headers["x-request-id"] = request.state.request_id
+    return response
+
+# Wire up rate limiting & standardized error envelopes
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(AppError, app_error_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 # CORS lets the Next.js frontend (a different port) call this API from the browser
 app.add_middleware(
@@ -46,6 +70,12 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(face.router)
 app.include_router(monitor.router)
+app.include_router(courses.router)
+# Version 1 Modular Domain Routes
+app.include_router(dashboard_v1.router)
+app.include_router(learning_v1.router)
+app.include_router(courses_v1.router)
+app.include_router(market_v1.router)
 
 
 @app.get("/health")

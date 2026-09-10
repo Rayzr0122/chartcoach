@@ -72,6 +72,9 @@ def login(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is disabled.")
 
+    now = datetime.now(timezone.utc)
+    db.users.update_one({"_id": user._id}, {"$set": {"last_login_at": now}})
+
     token = create_access_token(subject=user.email)
     set_auth_cookie(response, token)
     return Token(access_token=token)
@@ -120,6 +123,9 @@ def face_login(request: Request, response: Response, data: FaceLoginIn, db: Data
 
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is disabled.")
+
+    now = datetime.now(timezone.utc)
+    db.users.update_one({"_id": user._id}, {"$set": {"last_login_at": now}})
 
     token = create_access_token(subject=user.email)
     set_auth_cookie(response, token)

@@ -2,6 +2,7 @@
 # FastAPI uses these to check incoming data and format outgoing data.
 
 from datetime import datetime
+from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -22,8 +23,13 @@ class UserLogin(BaseModel):
 class UserOut(BaseModel):
     # Data we send back about a user (never includes the password)
     id: str | int
+    public_user_id: Optional[str] = None
     email: EmailStr
     full_name: str
+    role: str = "user"
+    status: str = "active"
+    subscription_plan: str = "free"
+    subscription_status: str = "active"
     is_active: bool
     created_at: datetime
     has_face_enrolled: bool = False

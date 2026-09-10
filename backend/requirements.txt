@@ -29,3 +29,6 @@ numpy
 
 # Real-time monitoring (websocket connection)
 websockets
+
+# HTTP Client for financial market APIs (Polygon.io)
+httpx>=0.28.0

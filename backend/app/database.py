@@ -16,9 +16,37 @@ db: Database = client[settings.database_name]
 
 
 def init_db() -> None:
-    # Ensure indexes exist in MongoDB collections
+    # Ensure production indexes exist across all domain collections
     try:
+        # Identity
         db.users.create_index("email", unique=True)
+        db.users.create_index("public_user_id", unique=True, sparse=True)
+
+        # Learning Domain
+        db.courses.create_index("id", unique=True)
+        db.courses.create_index("levelNumber")
+
+        db.enrollments.create_index([("user_id", pymongo.ASCENDING), ("course_id", pymongo.ASCENDING)], unique=True)
+        db.enrollments.create_index([("user_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
+
+        db.lesson_progress.create_index([("user_id", pymongo.ASCENDING), ("lesson_id", pymongo.ASCENDING)], unique=True)
+        db.lesson_progress.create_index([("user_id", pymongo.ASCENDING), ("course_id", pymongo.ASCENDING)])
+        db.lesson_progress.create_index([("user_id", pymongo.ASCENDING), ("last_watched_at", pymongo.DESCENDING)])
+
+        db.learning_activities.create_index([("user_id", pymongo.ASCENDING), ("occurred_at", pymongo.DESCENDING)])
+
+        # Watchlists
+        db.watchlists.create_index([("user_id", pymongo.ASCENDING), ("is_default", pymongo.DESCENDING)])
+        db.watchlist_items.create_index(
+            [("watchlist_id", pymongo.ASCENDING), ("symbol", pymongo.ASCENDING), ("exchange", pymongo.ASCENDING)],
+            unique=True,
+        )
+
+        # AI & Sessions
+        db.ai_conversations.create_index([("user_id", pymongo.ASCENDING), ("updated_at", pymongo.DESCENDING)])
+        db.ai_messages.create_index([("conversation_id", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)])
+        db.notifications.create_index([("user_id", pymongo.ASCENDING), ("read_at", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
+        db.session_registrations.create_index([("session_id", pymongo.ASCENDING), ("user_id", pymongo.ASCENDING)], unique=True)
     except Exception as exc:
         print(f"Warning ensuring MongoDB indexes: {exc}")
 

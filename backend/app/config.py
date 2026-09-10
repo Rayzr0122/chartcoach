@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Allowed frontend origin (for CORS)
     frontend_origin: str = "http://localhost:3000"
 
+    # Polygon.io API key for live financial market data & TradingView charts
+    polygon_api_key: str = "u2kEX_q5yC8uBLevrFS13IjJjVvpe3eL"
+
     # Whether the login cookie requires HTTPS. Keep False for local dev over
     # plain http://, but this MUST be True in any real deployment.
     cookie_secure: bool = False

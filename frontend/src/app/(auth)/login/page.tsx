@@ -249,7 +249,7 @@ function LoginForm() {
                   setDismissRegistered(true);
                 }}
                 className="chartcoach-input font-medium"
-                placeholder="riyamaheshwari@gmail.com"
+                placeholder="your@email.com"
               />
             </div>
             {isEmailValid && (

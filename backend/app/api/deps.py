@@ -43,3 +43,24 @@ def get_current_user(
         raise credentials_error
 
     return user
+
+
+def get_optional_current_user(
+    token_from_header: str | None = Depends(oauth2_scheme),
+    token_from_cookie: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+    db: Database = Depends(get_db),
+) -> User | None:
+    token = token_from_header or token_from_cookie
+    if token is None:
+        return None
+
+    email = decode_access_token(token)
+    if email is None:
+        return None
+
+    user_doc = db.users.find_one({"email": email})
+    user = User.from_doc(user_doc)
+    if user is None or not user.is_active:
+        return None
+
+    return user

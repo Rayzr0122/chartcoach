@@ -79,7 +79,7 @@ body {
 .chartcoach-btn-primary {
   width: 100%;
   padding: 0.875rem 1.5rem;
-  background-color: #0d6efd;
+  background: linear-gradient(135deg, #206DF8 0%, #155CE9 55%, #0B50D9 100%);
   color: #ffffff;
   font-weight: 600;
   font-size: 0.95rem;
@@ -87,7 +87,7 @@ body {
   border-radius: 1rem;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  box-shadow: 0 4px 12px rgba(13, 110, 253, 0.25);
+  box-shadow: 0 8px 22px -3px rgba(27, 100, 242, 0.45), 0 3px 8px -2px rgba(27, 100, 242, 0.25);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -95,13 +95,36 @@ body {
 }
 
 .chartcoach-btn-primary:hover {
-  background-color: #0b5ed7;
+  background: linear-gradient(135deg, #2674FA 0%, #1961EB 55%, #0D55E0 100%);
   transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(13, 110, 253, 0.35);
+  box-shadow: 0 12px 28px -3px rgba(27, 100, 242, 0.55), 0 4px 10px -2px rgba(27, 100, 242, 0.3);
 }
 
 .chartcoach-btn-primary:active {
-  transform: translateY(0) scale(0.99);
+  transform: scale(0.98);
+}
+
+/* ─── Signature Reference Pill Button (from user cropped reference) ─── */
+.btn-pill-blue {
+  background: linear-gradient(135deg, #206DF8 0%, #155CE9 55%, #0B50D9 100%);
+  color: #ffffff;
+  font-weight: 500;
+  border-radius: 1rem;
+  box-shadow: 0 8px 20px -3px rgba(27, 100, 242, 0.42), 0 3px 8px -2px rgba(27, 100, 242, 0.25);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.btn-pill-blue:hover {
+  background: linear-gradient(135deg, #2674FA 0%, #1961EB 55%, #0D55E0 100%);
+  box-shadow: 0 12px 26px -3px rgba(27, 100, 242, 0.52), 0 4px 10px -2px rgba(27, 100, 242, 0.3);
+  transform: translateY(-1px);
+}
+
+.btn-pill-blue:active {
+  transform: scale(0.98);
 }
 
 .chartcoach-btn-primary:disabled {
@@ -372,3 +395,29 @@ body {
 .animate-overlay-in {
   animation: overlay-in 150ms ease forwards;
 }
+
+/* ─── Modern Custom Scrollbar ─── */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ─── Dashboard Card Hover & Glow ─── */
+.card-hover-glow {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.card-hover-glow:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px -10px rgba(15, 23, 42, 0.08);
+}
+

@@ -78,8 +78,17 @@ function hasSignificantMotion(
 }
 
 export function useFaceMonitor(enabled: boolean): MonitorState {
+  // Feature flag: Toggle continuous face monitoring & workstation lock
+  // Set NEXT_PUBLIC_ENABLE_WORKSTATION_LOCK=false in .env.local to pause
+  const isEnvEnabled =
+    process.env.NEXT_PUBLIC_ENABLE_WORKSTATION_LOCK !== "false" &&
+    process.env.NEXT_PUBLIC_DISABLE_WORKSTATION_LOCK !== "true" &&
+    process.env.NEXT_PUBLIC_PAUSE_WORKSTATION_LOCK !== "true";
+
+  const isMonitoringActive = enabled && isEnvEnabled;
+
   const [state, setState] = useState<MonitorState>({
-    status: "connecting",
+    status: isMonitoringActive ? "connecting" : "active",
     reason: null,
     stream: null,
     lastConfirmedAt: null,
@@ -95,7 +104,15 @@ export function useFaceMonitor(enabled: boolean): MonitorState {
   const MAX_SKIPS = 3;
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!isMonitoringActive) {
+      setState({
+        status: "active",
+        reason: null,
+        stream: null,
+        lastConfirmedAt: null,
+      });
+      return;
+    }
 
     let cancelled = false;
 

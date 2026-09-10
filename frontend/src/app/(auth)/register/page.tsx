@@ -132,7 +132,7 @@ export default function RegisterPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="chartcoach-input font-medium"
-              placeholder="riyamaheshwari@gmail.com"
+              placeholder="your@email.com"
               autoComplete="email"
             />
           </div>
