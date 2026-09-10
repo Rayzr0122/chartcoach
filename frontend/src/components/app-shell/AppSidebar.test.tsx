@@ -15,5 +15,5 @@ it("offers a player test entry point in the dashboard sidebar", () => {
     />,
   );
 
-  expect(screen.getByRole("link", { name: "Test player" })).toHaveAttribute("href", "/learn/l1");
+  expect(screen.getByRole("link", { name: "Test player" })).toHaveAttribute("href", "/learn/l1?preview=1");
 });

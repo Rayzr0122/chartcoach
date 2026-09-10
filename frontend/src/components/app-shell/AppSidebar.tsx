@@ -73,7 +73,7 @@ export default function AppSidebar({
     },
     {
       label: "Test player",
-      href: "/learn/l1",
+      href: "/learn/l1?preview=1",
       icon: BookOpen,
     },
     {
