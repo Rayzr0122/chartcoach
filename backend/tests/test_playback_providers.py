@@ -2,6 +2,7 @@ import mongomock
 import pytest
 
 from app.services.playback_providers import (
+    CredentialedDrmPlaybackProvider,
     DevelopmentPlaybackProvider,
     MuxPlaybackProvider,
     PlaybackProviderUnavailable,
@@ -19,6 +20,22 @@ class CapturingProvider:
     def authorize(self, asset, lesson_duration_seconds, playback_session_id=None):
         self.asset = asset
         return {"manifest_url": "https://example.test/manifest.m3u8", "expires_at": "2099-01-01T00:00:00+00:00"}
+
+
+class CredentialedAdapterDouble:
+    name = "vendor-test-double"
+
+    def authorize(self, asset, lesson_duration_seconds, playback_session_id):
+        assert asset["id"] == "asset-1"
+        assert lesson_duration_seconds == 60
+        assert playback_session_id == "session-1"
+        return {
+            "manifest_url": "https://media.example.test/manifest.mpd",
+            "widevine_license_url": "https://license.example.test/widevine",
+            "fairplay_license_url": "https://license.example.test/fairplay",
+            "fairplay_certificate_url": "https://license.example.test/fairplay.cer",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+        }
 
 
 def test_migration_creates_one_asset_and_preserves_existing_lesson_identity():
@@ -82,7 +99,6 @@ def test_development_provider_returns_the_neutral_local_contract_in_development(
             lesson_duration_seconds=60,
             playback_session_id="session-1",
         )
-
     with pytest.raises(PlaybackProviderUnavailable, match="published generation"):
         provider.authorize(
             {"id": "asset-1", "source_provider": "local", "state": "ready"},
@@ -90,6 +106,19 @@ def test_development_provider_returns_the_neutral_local_contract_in_development(
             playback_session_id="session-1",
         )
 
+
+def test_credentialed_adapter_contract_preserves_widevine_and_fairplay_urls():
+    provider = CredentialedDrmPlaybackProvider(CredentialedAdapterDouble())
+
+    authorization = provider.authorize(
+        {"id": "asset-1"}, lesson_duration_seconds=60, playback_session_id="session-1"
+    )
+
+    assert authorization["provider"] == "vendor-test-double"
+    assert authorization["drm"] == {"type": "credentialed"}
+    assert authorization["widevine_license_url"].startswith("https://")
+    assert authorization["fairplay_license_url"].startswith("https://")
+    assert authorization["fairplay_certificate_url"].startswith("https://")
 
 def test_provider_factory_restricts_local_selection_and_retains_mux_default():
     config = type(

@@ -47,7 +47,7 @@ $backendEnvironment = @{
     FRONTEND_ORIGIN = "http://127.0.0.1:3000"
     COOKIE_SECURE = "false"
     APP_ENVIRONMENT = "development"
-    PLAYBACK_PROVIDER = "mux"
+    PLAYBACK_PROVIDER = "local"
     LOCAL_MEDIA_WRAPPING_SECRET = $localEnvironment.LOCAL_MEDIA_WRAPPING_SECRET
     MEDIA_ROOT = (Join-Path $workspace ".media")
 }

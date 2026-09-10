@@ -114,3 +114,6 @@ commands introduced in Sprint 2.
 
 See `docs/media-packaging.md` for the pinned adaptive encoding pipeline,
 operator commands, validation rules, and measured Sprint 3 evidence.
+
+See `docs/local-feasibility-release.md` for the Sprint 5 learner-flow runbook,
+Sprint 6 failure checks, and the explicit boundary before credentialed DRM.

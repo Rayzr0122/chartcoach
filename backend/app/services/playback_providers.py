@@ -26,6 +26,55 @@ class PlaybackProvider(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class CredentialedDrmAdapter(Protocol):
+    """Vendor boundary for the later Widevine/FairPlay credentialed phase."""
+
+    name: str
+
+    def authorize(
+        self,
+        asset: dict[str, Any],
+        lesson_duration_seconds: float,
+        playback_session_id: str,
+    ) -> dict[str, Any]: ...
+
+
+class CredentialedDrmPlaybackProvider:
+    """Normalizes a credentialed vendor adapter without embedding vendor SDKs."""
+
+    def __init__(self, adapter: CredentialedDrmAdapter) -> None:
+        self._adapter = adapter
+        self.name = adapter.name
+
+    def authorize(
+        self,
+        asset: dict[str, Any],
+        lesson_duration_seconds: float,
+        playback_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not playback_session_id:
+            raise PlaybackProviderUnavailable("A playback session is required")
+        authorization = self._adapter.authorize(
+            asset, lesson_duration_seconds, playback_session_id
+        )
+        required_urls = (
+            "manifest_url",
+            "widevine_license_url",
+            "fairplay_license_url",
+            "fairplay_certificate_url",
+        )
+        if any(not str(authorization.get(key, "")).startswith("https://") for key in required_urls):
+            raise PlaybackProviderUnavailable("Credentialed DRM authorization is incomplete")
+        if not authorization.get("expires_at"):
+            raise PlaybackProviderUnavailable("Credentialed DRM authorization has no expiry")
+        return {
+            **authorization,
+            "provider": self.name,
+            "media_asset_id": asset["id"],
+            "drm": {"type": "credentialed"},
+        }
+
+
 class MuxPlaybackProvider:
     name = "mux"
 

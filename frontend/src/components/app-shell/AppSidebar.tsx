@@ -72,6 +72,11 @@ export default function AppSidebar({
       icon: BookOpen,
     },
     {
+      label: "Test player",
+      href: "/learn/l1",
+      icon: BookOpen,
+    },
+    {
       label: "Practice",
       href: "/simulator",
       icon: Target,

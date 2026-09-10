@@ -50,3 +50,32 @@ def test_pilot_import_skips_enrollment_when_requested_user_does_not_exist():
 
     assert result["enrollments"] == 0
     assert db.enrollments.count_documents({}) == 0
+
+
+def test_pilot_import_can_link_a_ready_local_media_asset():
+    db = mongomock.MongoClient().chartcoach
+    db.users.insert_one({"_id": "user-1", "email": "learner@example.test"})
+    db.media_assets.insert_one(
+        {
+            "id": "asset-local-1",
+            "source_provider": "local",
+            "state": "ready",
+            "published_generation_id": "generation-1",
+        }
+    )
+
+    result = upsert_pilot_lesson(
+        db,
+        mux_playback_id=None,
+        media_asset_id="asset-local-1",
+        duration_seconds=900,
+        caption_url="https://captions.example.test/l1.vtt",
+        thumbnail_url="https://media.example.test/poster.jpg",
+        enrollment_email="learner@example.test",
+    )
+
+    lesson = Lesson.model_validate(db.lessons.find_one({"id": "l1"}))
+    assert result["enrollments"] == 1
+    assert lesson.media_asset_id == "asset-local-1"
+    assert lesson.mux_playback_id is None
+    assert lesson.segments[0].thumbnail.url == "https://media.example.test/poster.jpg"
