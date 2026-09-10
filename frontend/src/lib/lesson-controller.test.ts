@@ -29,12 +29,38 @@ async function seekFixture(passed = true, start = 0) {
   await controller.start();
   return { controller, player, view: () => view! };
 }
-it("blocks forward seeking and keeps the playhead at the watched position", async () => {
+it("blocks seeking beyond the furthest naturally watched position", async () => {
   const f = await seekFixture();
   await f.controller.togglePlay();
   f.controller.seek(30);
   expect(f.player.snapshot().position).toBe(0);
   expect(f.view().seekBlocked).toBe(true);
+  f.controller.destroy();
+});
+it("allows forward review through the furthest naturally watched position", async () => {
+  const f = await seekFixture();
+  await f.controller.togglePlay();
+  for (let position = 1; position <= 30; position++) {
+    await vi.advanceTimersByTimeAsync(1000);
+    f.player.emit("timeupdate", { position, paused: false });
+  }
+  f.controller.seek(10);
+  f.controller.seek(25);
+  expect(f.player.snapshot().position).toBe(25);
+  expect(f.view().seekBlocked).toBe(false);
+  expect(f.view().seekableUntil).toBe(30);
+  f.controller.seek(45);
+  expect(f.player.snapshot().position).toBe(30);
+  expect(f.view().seekBlocked).toBe(true);
+  f.controller.destroy();
+});
+it("does not unlock the timeline from paused time updates", async () => {
+  const f = await seekFixture();
+  await vi.advanceTimersByTimeAsync(1000);
+  f.player.emit("timeupdate", { position: 1, paused: true });
+  f.controller.seek(5);
+  expect(f.player.snapshot().position).toBe(0);
+  expect(f.view().seekableUntil).toBe(0);
   f.controller.destroy();
 });
 it("still permits backward review without showing a forward-seek warning", async () => {

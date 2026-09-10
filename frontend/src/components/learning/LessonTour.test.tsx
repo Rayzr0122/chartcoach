@@ -17,8 +17,8 @@ it("recommends the first lesson guide with anchored labels and forward-seek guid
   expect(screen.getByRole("dialog", { name: "Lesson player guide" })).toBeVisible();
   expect(screen.getByText("Meet your lesson player")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Next" }));
-  expect(screen.getByText("Watch in sequence")).toBeVisible();
-  expect(screen.getByText(/Forward seeking is disabled/)).toBeVisible();
+  expect(screen.getByText("Your watched range")).toBeVisible();
+  expect(screen.getByText(/timeline unlocks as you watch/i)).toBeVisible();
 });
 
 it("lets learners skip the recommended guide and remembers that choice", async () => {
@@ -27,4 +27,11 @@ it("lets learners skip the recommended guide and remembers that choice", async (
   await user.click(screen.getByRole("button", { name: "Skip tour" }));
   expect(screen.queryByRole("dialog", { name: "Lesson player guide" })).not.toBeInTheDocument();
   expect(localStorage.getItem("chartcoach-tour-test")).toBe("dismissed");
+});
+
+it("reopens the guide when requested after dismissal", async () => {
+  const view = render(<LessonTour storageKey="chartcoach-tour-test" />);
+  await userEvent.click(screen.getByRole("button", { name: "Skip tour" }));
+  view.rerender(<LessonTour storageKey="chartcoach-tour-test" openRequest={1} />);
+  expect(await screen.findByRole("dialog", { name: "Lesson player guide" })).toBeVisible();
 });

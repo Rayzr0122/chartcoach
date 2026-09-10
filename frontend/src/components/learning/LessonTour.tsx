@@ -2,18 +2,18 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-type Props = { storageKey: string };
+type Props = { storageKey: string; openRequest?: number };
 type Step = { target: string; eyebrow: string; title: string; body: string };
 
 const steps: Step[] = [
   { target: "player", eyebrow: "THE PLAYER", title: "Meet your lesson player", body: "Play, pause, change speed, turn on captions, and use the timeline to review what you have watched." },
-  { target: "seek", eyebrow: "WATCH IN ORDER", title: "Watch in sequence", body: "Forward seeking is disabled so skipped sections cannot count toward progress or bypass required questions. You can always go back and review." },
+  { target: "seek", eyebrow: "WATCHED RANGE", title: "Your watched range", body: "The timeline unlocks as you watch. You can revisit any unlocked moment, while unseen sections stay protected so questions and progress remain meaningful." },
   { target: "transcript", eyebrow: "INTERACTIVE TRANSCRIPT", title: "Follow along with the transcript", body: "The current line follows the video. Select any line to jump back to that moment, or search for a phrase." },
   { target: "chat", eyebrow: "YOUR LESSON COACH", title: "Ask ChartCoach", body: "Ask about the current moment or the whole lesson. Answers stay grounded in this lecture." },
   { target: "progress", eyebrow: "YOUR PROGRESS", title: "Build progress as you learn", body: "Watch continuously, complete the required questions, and your progress will be saved so you can resume later." },
 ];
 
-export default function LessonTour({ storageKey }: Props) {
+export default function LessonTour({ storageKey, openRequest = 0 }: Props) {
   const [stepIndex, setStepIndex] = useState<number | null>(null);
   const [box, setBox] = useState({ top: 0, left: 0, width: 0, height: 0 });
   const step = stepIndex === null ? null : steps[stepIndex];
@@ -25,6 +25,10 @@ export default function LessonTour({ storageKey }: Props) {
       setStepIndex(0);
     }
   }, [storageKey]);
+
+  useEffect(() => {
+    if (openRequest > 0) setStepIndex(0);
+  }, [openRequest]);
 
   useEffect(() => {
     if (!step) return;

@@ -43,7 +43,7 @@ export default function LessonPlayer({
   tourStorageKey,
 }: Props) {
   const video = useRef<HTMLVideoElement>(null),
-    container = useRef<HTMLDivElement>(null),
+    playerSurface = useRef<HTMLDivElement>(null),
     dialog = useRef<HTMLDivElement>(null),
     play = useRef<HTMLButtonElement>(null);
   const controller = useRef<LessonController | null>(null);
@@ -51,7 +51,8 @@ export default function LessonPlayer({
   const [view, setView] = useState<LessonView | null>(null);
   const [expanded, setExpanded] = useState(false),
     [preview, setPreview] = useState<LessonSegment | null>(null),
-    [speedNotice, setSpeedNotice] = useState(false);
+    [speedNotice, setSpeedNotice] = useState(false),
+    [tourRequest, setTourRequest] = useState(0);
   useEffect(() => {
     const element = video.current!;
     const instance = new LessonController(
@@ -64,16 +65,7 @@ export default function LessonPlayer({
     );
     controller.current = instance;
     void instance.start();
-    const exitNative = () => {
-      instance.pause();
-      (
-        element as HTMLVideoElement & { webkitExitFullscreen?: () => void }
-      ).webkitExitFullscreen?.();
-      setExpanded(true);
-    };
-    element.addEventListener("webkitbeginfullscreen", exitNative);
     return () => {
-      element.removeEventListener("webkitbeginfullscreen", exitNative);
       instance.destroy();
       controller.current = null;
     };
@@ -113,18 +105,24 @@ export default function LessonPlayer({
       await document.exitFullscreen();
       setExpanded(false);
     } else if (expanded) setExpanded(false);
-    else if (container.current?.requestFullscreen) {
+    else if (playerSurface.current?.requestFullscreen) {
       try {
-        await container.current.requestFullscreen();
+        await playerSurface.current.requestFullscreen();
         setExpanded(true);
       } catch {
         setExpanded(true);
       }
-    } else setExpanded(true);
+    } else {
+      const nativeVideo = video.current as HTMLVideoElement & {
+        webkitEnterFullscreen?: () => void;
+      };
+      if (nativeVideo?.webkitEnterFullscreen) nativeVideo.webkitEnterFullscreen();
+      else setExpanded(true);
+    }
   }
   useEffect(() => {
     const changed = () => {
-      if (!document.fullscreenElement) setExpanded(false);
+      setExpanded(document.fullscreenElement === playerSurface.current);
     };
     document.addEventListener("fullscreenchange", changed);
     return () => document.removeEventListener("fullscreenchange", changed);
@@ -153,20 +151,22 @@ export default function LessonPlayer({
     if (key === "arrowright") c.seek(s.position + 5);
   }
   const s = view?.snapshot,
-    position = s?.position ?? authorization.resume_position_seconds;
+    position = s?.position ?? authorization.resume_position_seconds,
+    seekableUntil = Math.min(
+      lesson.duration_seconds,
+      Math.max(position, view?.seekableUntil ?? position),
+    );
   const active =
     lesson.segments.find(
       (segment) =>
         position >= segment.start_seconds && position < segment.end_seconds,
     ) ?? lesson.segments.at(-1);
   return (
-    <div
-      ref={container}
-      className={`${styles.workspace} ${expanded ? styles.expanded : ""}`}
-    >
+    <div className={styles.workspace}>
       <div className={styles.mediaColumn}>
       <div
-      className={styles.player}
+        ref={playerSurface}
+        className={`${styles.player} ${expanded ? styles.playerExpanded : ""}`}
         data-tour-target="player"
         role="region"
         aria-label="Lesson video"
@@ -205,17 +205,16 @@ export default function LessonPlayer({
             <input
               type="range"
               aria-label="Playback position"
-              title="You can seek backward to review; forward seeking is disabled"
+              title="Seek within the part you have watched"
               min={0}
-              max={position}
+              max={lesson.duration_seconds}
               step={0.1}
               value={position}
               onChange={(e) => controller.current?.seek(Number(e.target.value))}
               style={{
-                background: `linear-gradient(to right, #ff167d ${(position / lesson.duration_seconds) * 100}%, #ffffff40 0)`,
+                background: `linear-gradient(to right, #ff167d 0 ${(position / lesson.duration_seconds) * 100}%, #ffffffa8 ${(position / lesson.duration_seconds) * 100}% ${(seekableUntil / lesson.duration_seconds) * 100}%, #ffffff40 ${(seekableUntil / lesson.duration_seconds) * 100}% 100%)`,
               }}
             />
-            <span className={styles.seekHint}>Forward seeking is disabled so progress and required questions count.</span>
             <div className={styles.markers}>
               {lesson.segments.map((segment) => (
                 <button
@@ -326,11 +325,21 @@ export default function LessonPlayer({
                 controller.current?.setCaptions(!s?.captionsEnabled)
               }
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M10 9H7v6h3m9-6h-3v6h3" /></svg>
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M10 9H7v6h3m9-6h-3v6h3" /></svg>
             </button>
+            {tourStorageKey && (
+              <button
+                type="button"
+                aria-label="Open player tutorial"
+                data-tooltip="Player tutorial"
+                onClick={() => setTourRequest((request) => request + 1)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M9.6 9a2.5 2.5 0 1 1 4.2 1.8c-1.2 1-1.8 1.3-1.8 2.7M12 17h.01" /></svg>
+              </button>
+            )}
             <button
               type="button"
-              aria-label={expanded ? "Exit expanded view" : "Expand player"}
+              aria-label={expanded ? "Exit fullscreen" : "Expand player"}
               data-tooltip={expanded ? "Exit fullscreen (F)" : "Fullscreen (F)"}
               aria-keyshortcuts="f"
               onClick={() => void fullscreen()}
@@ -404,11 +413,11 @@ export default function LessonPlayer({
         </p>
       </aside>
       </div>
-      {tourStorageKey && <LessonTour storageKey={tourStorageKey} />}
+      {tourStorageKey && <LessonTour storageKey={tourStorageKey} openRequest={tourRequest} />}
       {seekBlocked && !modalOpen && (
         <div className={styles.seekNotice} role="status" aria-label="Forward seeking unavailable">
-          <div><strong>Forward seeking unavailable</strong></div>
-          <p>Watch the lesson in sequence so progress and required questions count. You can seek backward anytime.</p>
+          <div><strong>This section is not unlocked yet</strong></div>
+          <p>You can seek forward through video you have already watched. Watch this section naturally first so progress and required questions stay accurate.</p>
           <button type="button" aria-label="Dismiss forward seeking notice" onClick={() => controller.current?.dismissSeekBlocked()}>×</button>
         </div>
       )}

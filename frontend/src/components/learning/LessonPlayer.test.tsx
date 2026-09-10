@@ -29,16 +29,27 @@ it("changes playback speed without changing the playback position", async () => 
   fireEvent.change(speed, { target: { value: "0.5" } });
   expect(player.snapshot().playbackRate).toBe(0.5);
 });
-it("explains and blocks forward timeline seeking", async () => {
+it("keeps the full timeline usable while limiting seeks to watched video", async () => {
   const { player } = setup({ passed_prompt_ids: ["q1"] });
   const timeline = screen.getByRole("slider", { name: "Playback position" });
+  expect(timeline).toHaveAttribute("max", "60");
+  expect(timeline).toHaveAttribute("title", "Seek within the part you have watched");
+  expect(screen.queryByText(/Forward seeking is disabled/)).toBeNull();
   fireEvent.change(timeline, { target: { value: "35" } });
-  expect(timeline).toHaveAttribute("title", "You can seek backward to review; forward seeking is disabled");
   expect(player.snapshot().position).toBe(0);
+});
+it("lets learners reopen the optional player tutorial from the help control", async () => {
+  localStorage.setItem("lesson-tour-test", "dismissed");
+  const t = setup({}, {}, "lesson-tour-test");
+  await screen.findByRole("button", { name: "Open player tutorial" });
+  await userEvent.click(screen.getByRole("button", { name: "Open player tutorial" }));
+  expect(await screen.findByRole("dialog", { name: "Lesson player guide" })).toBeVisible();
+  t.view.unmount();
 });
 function setup(
   overrides: Partial<typeof progress> = {},
   source: Partial<typeof authorization> = {},
+  tourStorageKey?: string,
 ) {
   const player = new FakePlayer();
   let saved = { ...progress, ...overrides };
@@ -101,6 +112,7 @@ function setup(
       factory={() => player}
       api={api}
       onUnauthorized={() => {}}
+      tourStorageKey={tourStorageKey}
     />,
   );
   return {
@@ -132,7 +144,7 @@ it("offers named controls, actual play state, mute/volume, captions, buffering a
   expect(screen.getByText("Buffering…")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Expand player" }));
   expect(
-    screen.getByRole("button", { name: "Exit expanded view" }),
+    screen.getByRole("button", { name: "Exit fullscreen" }),
   ).toBeVisible();
   t.view.unmount();
   expect(t.player.destroyed).toBe(true);
@@ -178,8 +190,8 @@ it.each(["timeline", "chapter", "keyboard", "native"])(
     }
     if (entry === "native")
       act(() => t.player.emit("seeking", { position: 50 }));
-    expect(t.player.state.position).toBe(entry === "keyboard" ? 18 : entry === "native" ? 0 : 0);
-    expect(screen.getByLabelText("Playback position")).toHaveAttribute("title", "You can seek backward to review; forward seeking is disabled");
+    expect(t.player.state.position).toBe(0);
+    expect(screen.getByLabelText("Playback position")).toHaveAttribute("title", "Seek within the part you have watched");
   },
 );
 it("opens the required question when playback naturally reaches its boundary", async () => {
@@ -189,6 +201,18 @@ it("opens the required question when playback naturally reaches its boundary", a
   expect(await screen.findByRole("dialog")).toHaveTextContent("Which point is the swing high?");
   expect(t.player.state.position).toBe(20);
   expect(t.player.state.paused).toBe(true);
+});
+it("requests fullscreen for the video player rather than the whole lesson workspace", async () => {
+  setup();
+  await screen.findByRole("button", { name: "Play" });
+  const player = screen.getByRole("region", { name: "Lesson video" });
+  const requestFullscreen = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(player, "requestFullscreen", {
+    configurable: true,
+    value: requestFullscreen,
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Expand player" }));
+  expect(requestFullscreen).toHaveBeenCalledOnce();
 });
 it("restores pending check with focus, retries wrong answers, and continues only on learner action", async () => {
   const t = setup({ resume_position_seconds: 20, pending_prompt_id: "q1" });
@@ -226,7 +250,7 @@ it("renews an expired capability on the heartbeat without automatic playback", a
   });
   expect(t.authorizations()).toBe(1);
 });
-it("handles shortcuts without taking keys from buttons, and exits native video fullscreen", async () => {
+it("handles shortcuts without taking keys from buttons or forcing native fullscreen to exit", async () => {
   setup();
   await screen.findByRole("button", { name: "Play" });
   const region = screen.getByRole("region", { name: "Lesson video" });
@@ -238,14 +262,15 @@ it("handles shortcuts without taking keys from buttons, and exits native video f
   expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
   fireEvent.keyDown(region, { key: "m" });
   expect(screen.getByRole("button", { name: "Unmute" })).toBeVisible();
-  fireEvent(
-    screen.getByLabelText("Lesson media"),
-    new Event("webkitbeginfullscreen"),
-  );
-  expect(screen.getByRole("button", { name: "Play" })).toBeVisible();
-  expect(
-    screen.getByRole("button", { name: "Exit expanded view" }),
-  ).toBeVisible();
+  const media = screen.getByLabelText("Lesson media");
+  const webkitExitFullscreen = vi.fn();
+  Object.defineProperty(media, "webkitExitFullscreen", {
+    configurable: true,
+    value: webkitExitFullscreen,
+  });
+  fireEvent(media, new Event("webkitbeginfullscreen"));
+  expect(webkitExitFullscreen).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
 });
 it("sends short observed heartbeat intervals and trusts only server completion", async () => {
   vi.useFakeTimers();
@@ -296,8 +321,8 @@ it("does not credit a native jump as watched coverage", async () => {
   await screen.findByRole("button", { name: "Play" });
   act(() => t.player.emit("timeupdate", { position: 10, paused: false }));
   await act(async () => t.player.emit("seeking", { position: 40 }));
-  expect(t.player.state.position).toBe(10);
-  expect(screen.getByLabelText("Playback position")).toHaveAttribute("title", "You can seek backward to review; forward seeking is disabled");
+  expect(t.player.state.position).toBe(0);
+  expect(screen.getByLabelText("Playback position")).toHaveAttribute("title", "Seek within the part you have watched");
 });
 it("restores authoritative position after server rejection", async () => {
   const t = setup();
@@ -307,7 +332,7 @@ it("restores authoritative position after server rejection", async () => {
   };
   await act(async () => t.player.emit("seeking", { position: 40 }));
   expect(t.player.state.position).toBe(0);
-  expect(screen.getByRole("status", { name: "Forward seeking unavailable" })).toHaveTextContent(/progress and required questions count/i);
+  expect(screen.getByRole("status", { name: "Forward seeking unavailable" })).toHaveTextContent(/progress and required questions stay accurate/i);
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 it("keeps recovery reachable when a server error restores a pending prompt", async () => {

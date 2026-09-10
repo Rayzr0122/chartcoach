@@ -26,6 +26,7 @@ export type LessonView = {
   seekWarning: boolean;
   seekNotice: number | null;
   seekBlocked: boolean;
+  seekableUntil: number;
 };
 
 // The browser gate is a learning interaction. The backend alone approves progress.
@@ -37,6 +38,7 @@ export class LessonController {
   private correcting = false;
   private observedStart: number;
   private lastPosition: number;
+  private furthestWatched: number;
   private lastTime = Date.now();
   private serial: Promise<void> = Promise.resolve();
   private heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -53,6 +55,11 @@ export class LessonController {
     this.source = source;
     this.observedStart = source.resume_position_seconds;
     this.lastPosition = source.resume_position_seconds;
+    this.furthestWatched = Math.max(
+      source.resume_position_seconds,
+      lesson.progress.resume_position_seconds,
+      ...lesson.progress.watched_intervals.map((interval) => interval[1]),
+    );
     this.state = {
       snapshot: adapter.snapshot(),
       progress: lesson.progress,
@@ -65,6 +72,7 @@ export class LessonController {
       seekWarning: false,
       seekNotice: null,
       seekBlocked: false,
+      seekableUntil: this.furthestWatched,
     };
     this.unsubscribe = adapter.subscribe((event) => this.onEvent(event));
   }
@@ -73,6 +81,7 @@ export class LessonController {
       this.state = {
         ...this.state,
         ...patch,
+        seekableUntil: this.furthestWatched,
         snapshot: this.adapter.snapshot(),
       };
       this.update(this.state);
@@ -132,10 +141,24 @@ export class LessonController {
       if (!this.adapter.snapshot().paused) this.adapter.pause();
       return;
     }
-    if (event.type === "seeking" && position > this.lastPosition) {
-      this.move(this.lastPosition);
+    if (event.type === "seeking" && position > this.furthestWatched) {
+      this.move(this.furthestWatched);
       this.publish({ seekBlocked: true });
       return;
+    }
+    if (event.type === "timeupdate") {
+      const delta = position - this.lastPosition;
+      const elapsed = (Date.now() - this.lastTime) / 1000;
+      const naturalAdvance =
+        !event.snapshot.paused &&
+        delta >= 0 &&
+        delta <=
+          Math.max(
+            2,
+            elapsed * event.snapshot.playbackRate * 1.5 + 1,
+          );
+      if (naturalAdvance)
+        this.furthestWatched = Math.max(this.furthestWatched, position);
     }
     const gate = this.gate();
     if (gate && position >= gate.end_seconds && !this.state.prompt) {
@@ -210,8 +233,8 @@ export class LessonController {
       0,
       Math.min(this.lesson.duration_seconds, position),
     );
-    if (allowed > this.lastPosition) {
-      this.move(this.lastPosition);
+    if (allowed > this.furthestWatched) {
+      this.move(this.furthestWatched);
       this.publish({ seekBlocked: true });
       return;
     }
@@ -392,6 +415,11 @@ export class LessonController {
       if (this.disposed) return;
       this.observedStart = source.resume_position_seconds;
       this.lastPosition = source.resume_position_seconds;
+      this.furthestWatched = Math.max(
+        source.resume_position_seconds,
+        latest.progress.resume_position_seconds,
+        ...latest.progress.watched_intervals.map((interval) => interval[1]),
+      );
       await this.adapter.load(
         source,
         source.resume_position_seconds,
