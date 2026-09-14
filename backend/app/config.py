@@ -26,6 +26,28 @@ class Settings(BaseSettings):
     # plain http://, but this MUST be True in any real deployment.
     cookie_secure: bool = False
 
+    app_environment: str = "development"
+    playback_provider: str = "mux"
+    # Vendor DRM credentials may remain pending while local encrypted
+    # playback is used for development verification.
+    drm_credentials_status: str = "pending"
+    media_base_url: str = "http://127.0.0.1:8000"
+    local_playback_session_minutes: int = 15
+    local_media_wrapping_secret: str | None = None
+    media_root: str = "../.media"
+    # Production must select a real server-side renderer. The local proof keeps
+    # this disabled so existing Clear Key fixtures remain playable.
+    watermark_mode: str = "disabled"
+    watermark_secret: str | None = None
+    watermark_startup_budget_seconds: int = 5
+    watermark_renderer_enabled: bool = False
+
+    # Mux signing is optional so unrelated APIs can start without video credentials.
+    mux_signing_key_id: str | None = None
+    mux_signing_private_key_base64: str | None = None
+    mux_playback_token_expire_minutes: int = 120
+    mux_playback_restriction_id: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
