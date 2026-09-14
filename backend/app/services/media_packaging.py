@@ -9,8 +9,12 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import time
 from typing import Any, Callable, Protocol
+
+from app.services.media_ingest import _sha256
+from app.services.watermarking import WatermarkIdentity, prepare_watermark_overlay
 
 
 FFMPEG_IMAGE = (
@@ -21,6 +25,7 @@ PACKAGER_IMAGE = (
     "google/shaka-packager:v3.9.3"
     "@sha256:3cc287d86a3d291a8b102c636b9c2bdd51f14cdbe7812f79254414e25de897e9"
 )
+_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 @dataclass(frozen=True)
@@ -42,12 +47,48 @@ def plan_renditions(source_height: int) -> list[Rendition]:
 def validate_generation(generation_root: Path) -> bool:
     package_root = generation_root / "package"
     required = [package_root / "master.m3u8", package_root / "manifest.mpd"]
-    return (
-        all(path.is_file() and path.stat().st_size > 0 for path in required)
-        and any(path.stat().st_size > 0 for path in package_root.glob("*.m4s"))
-        and any(path.stat().st_size > 0 for path in (generation_root / "thumbnails").glob("*.jpg"))
-        and not any(package_root.glob("packager-tempfile-*"))
-    )
+    if not all(path.is_file() and path.stat().st_size > 0 for path in required):
+        return False
+    if any(package_root.glob("packager-tempfile-*")):
+        return False
+    if not any(path.is_file() and path.stat().st_size > 0 for path in package_root.glob("*.m4s")):
+        return False
+    if not any(
+        path.is_file() and path.stat().st_size > 0
+        for path in (generation_root / "thumbnails").glob("*.jpg")
+    ):
+        return False
+
+    def referenced_file(reference: str) -> bool:
+        reference = reference.split("?", 1)[0].split("#", 1)[0]
+        if not reference or reference.startswith(("http://", "https://", "data:")):
+            return True
+        candidate = (package_root / reference).resolve()
+        return package_root in candidate.parents and candidate.is_file() and candidate.stat().st_size > 0
+
+    master_lines = (package_root / "master.m3u8").read_text(encoding="utf-8", errors="replace").splitlines()
+    playlists = [line.strip() for line in master_lines if line.strip() and not line.startswith("#")]
+    if not playlists or not all(referenced_file(reference) for reference in playlists):
+        return False
+    for playlist in playlists:
+        playlist_path = (package_root / playlist).resolve()
+        if playlist_path.suffix.lower() != ".m3u8" or not playlist_path.is_file():
+            continue
+        lines = playlist_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        segments = [line.strip() for line in lines if line.strip() and not line.startswith("#")]
+        if not segments or not all(referenced_file(reference) for reference in segments):
+            return False
+
+    mpd = (package_root / "manifest.mpd").read_text(encoding="utf-8", errors="replace")
+    for reference in re.findall(r'(?:media|initialization)="([^"]+)"', mpd):
+        if "$" not in reference and not referenced_file(reference):
+            return False
+    caption_root = generation_root / "captions"
+    if caption_root.exists() and any(
+        not path.is_file() or path.stat().st_size == 0 for path in caption_root.glob("*.vtt")
+    ):
+        return False
+    return True
 
 
 class CommandRunner(Protocol):
@@ -67,11 +108,24 @@ class MediaPackagingService:
         *,
         runner: CommandRunner | None = None,
         key_broker: Any | None = None,
+        environment: str = "development",
     ) -> None:
         self.db = db
         self.storage_root = storage_root.resolve()
         self.runner = runner or SubprocessRunner()
         self.key_broker = key_broker
+        self.environment = environment.lower()
+
+    def _run_command(self, generation_root: Path, command: list[str]) -> None:
+        """Run one packaging step and remove unpublished output on interruption."""
+        try:
+            self.runner.run(command)
+        except Exception:
+            # A generation is immutable once published. Removing only the
+            # unpublished directory makes the same generation ID safely
+            # retryable without touching the asset's current publication.
+            shutil.rmtree(generation_root, ignore_errors=True)
+            raise
 
     def package(
         self,
@@ -79,9 +133,17 @@ class MediaPackagingService:
         *,
         generation_id: str,
         validate: Callable[[Path], bool],
+        watermark_identity: WatermarkIdentity | None = None,
     ) -> dict[str, Any]:
         started = time.perf_counter()
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", generation_id):
+        watermark_required = self.environment == "production"
+        if watermark_required and watermark_identity is None:
+            raise RuntimeError("Production packaging requires a server watermark")
+        if watermark_identity is not None and self.key_broker is None:
+            raise RuntimeError("Server-watermarked packaging requires encryption")
+        if not _SAFE_ID.fullmatch(asset_id):
+            raise ValueError("media asset id is invalid")
+        if not _SAFE_ID.fullmatch(generation_id):
             raise ValueError("media generation id is invalid")
         asset = self.db.media_assets.find_one({"id": asset_id, "state": "ready_for_encoding"})
         if not asset:
@@ -92,6 +154,13 @@ class MediaPackagingService:
         )
         if not video_stream:
             raise ValueError("media asset has no video stream")
+        source_key = str(asset.get("source_key", ""))
+        source_path = (self.storage_root / source_key).resolve()
+        if self.storage_root not in source_path.parents or not source_path.is_file():
+            raise ValueError("media asset source is unavailable")
+        source_checksum = asset.get("source_checksum")
+        if source_checksum and _sha256(source_path) != source_checksum:
+            raise ValueError("media asset source checksum is invalid")
         renditions = plan_renditions(int(video_stream["height"]))
         generation_root = self.storage_root / "outputs" / asset_id / generation_id
         if generation_root.exists() or self.db.media_generations.find_one({"id": generation_id}):
@@ -104,15 +173,28 @@ class MediaPackagingService:
             directory.mkdir(parents=True, exist_ok=True)
 
         mount = f"{self.storage_root}:/media"
-        source_key = str(asset["source_key"]).replace("\\", "/")
+        source_key = source_key.replace("\\", "/")
         source = f"/media/{source_key}"
+        prepared_watermark = None
+        if watermark_identity is not None:
+            watermark_text_path = generation_root / "watermark" / "overlay.txt"
+            prepared_watermark = prepare_watermark_overlay(
+                watermark_identity,
+                host_text_path=watermark_text_path,
+                container_text_path=(
+                    f"/media/outputs/{asset_id}/{generation_id}/watermark/overlay.txt"
+                ),
+            )
         ffmpeg = ["docker", "run", "--rm", "-v", mount, FFMPEG_IMAGE, "-y", "-i", source]
         for rendition in renditions:
             output = f"/media/outputs/{asset_id}/{generation_id}/transcoded/{rendition.height}p.mp4"
+            video_filter = f"scale=-2:{rendition.height}"
+            if prepared_watermark is not None:
+                video_filter = f"{video_filter},{prepared_watermark.video_filter}"
             ffmpeg.extend(
                 [
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    "-vf", f"scale=-2:{rendition.height}",
+                    "-vf", video_filter,
                     "-c:v", "libx264", "-preset", "medium", "-profile:v", "high",
                     "-b:v", rendition.video_bitrate, "-maxrate", rendition.video_bitrate,
                     "-bufsize", rendition.video_bitrate, "-sc_threshold", "0",
@@ -121,10 +203,15 @@ class MediaPackagingService:
                     output,
                 ]
             )
-        self.runner.run(ffmpeg)
+        try:
+            self._run_command(generation_root, ffmpeg)
+        finally:
+            if prepared_watermark is not None:
+                prepared_watermark.text_path.unlink(missing_ok=True)
 
         thumbnail_output = f"/media/outputs/{asset_id}/{generation_id}/thumbnails/%05d.jpg"
-        self.runner.run(
+        self._run_command(
+            generation_root,
             [
                 "docker", "run", "--rm", "-v", mount, FFMPEG_IMAGE,
                 "-y", "-i", source, "-vf", "fps=1/10,scale=320:-2", "-q:v", "3",
@@ -139,7 +226,8 @@ class MediaPackagingService:
                 raise ValueError("caption language is invalid")
             caption_key = str(caption["source_key"]).replace("\\", "/")
             caption_output = f"/media/outputs/{asset_id}/{generation_id}/captions/captions_{language}.vtt"
-            self.runner.run(
+            self._run_command(
+                generation_root,
                 [
                     "docker", "run", "--rm", "-v", mount, FFMPEG_IMAGE,
                     "-y", "-i", f"/media/{caption_key}", "-f", "webvtt", caption_output,
@@ -190,7 +278,7 @@ class MediaPackagingService:
                 "--hls_master_playlist_output", f"/media/outputs/{asset_id}/{generation_id}/package/master.m3u8",
             ]
         )
-        self.runner.run(packager)
+        self._run_command(generation_root, packager)
 
         published = bool(validate(generation_root))
         output_bytes = sum(path.stat().st_size for path in generation_root.rglob("*") if path.is_file())
@@ -208,6 +296,15 @@ class MediaPackagingService:
                     "kid": content_key["kid"],
                 }
                 if content_key
+                else None
+            ),
+            "watermark": (
+                {
+                    "mode": "server",
+                    "algorithm": prepared_watermark.algorithm,
+                    "forensic_id": prepared_watermark.forensic_id,
+                }
+                if prepared_watermark is not None
                 else None
             ),
             "processing_seconds": round(time.perf_counter() - started, 3),

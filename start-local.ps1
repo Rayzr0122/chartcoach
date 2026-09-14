@@ -48,6 +48,7 @@ $backendEnvironment = @{
     COOKIE_SECURE = "false"
     APP_ENVIRONMENT = "development"
     PLAYBACK_PROVIDER = "local"
+    DRM_CREDENTIALS_STATUS = "pending"
     LOCAL_MEDIA_WRAPPING_SECRET = $localEnvironment.LOCAL_MEDIA_WRAPPING_SECRET
     MEDIA_ROOT = (Join-Path $workspace ".media")
 }

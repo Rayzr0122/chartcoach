@@ -46,11 +46,21 @@ export type PlaybackAuthorization = {
     type: "mux" | "development-clear-key";
     license_url?: string;
   };
+  drm_readiness?: {
+    mode: "development-clear-key" | "mux-managed-drm" | "unavailable";
+    credentials_status: "pending" | "configured";
+    production_ready: boolean;
+  };
   watermark?: {
     mode: "server";
     visible_text: string;
     segment_duration_seconds: 10;
     forensic_algorithm: string;
+  };
+  drm_policy?: {
+    require_hdcp: boolean;
+    widevine_video_robustness?: string;
+    widevine_audio_robustness?: string;
   };
   playback_session_id: string;
   resume_position_seconds: number;
@@ -99,6 +109,7 @@ async function request<T>(
   method: string,
   body?: unknown,
 ): Promise<T> {
+  const startedAt = performance.now();
   try {
     const response = await fetch(
       `${API_URL}/learning/lessons/${path}`,
@@ -114,6 +125,14 @@ async function request<T>(
           : {}),
       },
     );
+    if (process.env.NODE_ENV !== "test") {
+      console.info("[ChartCoach API timing]", {
+        operation: `${method} /learning/lessons/${path.split("/")[0]}`,
+        status: response.status,
+        duration_ms: Math.round(performance.now() - startedAt),
+        server_timing: response.headers.get("server-timing") ?? undefined,
+      });
+    }
     if (!response.ok) throw new LearningApiError(response.status);
     return (await response.json()) as T;
   } catch (error) {

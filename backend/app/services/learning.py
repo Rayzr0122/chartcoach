@@ -161,6 +161,19 @@ class LearningService:
         if watermark_mode == "server":
             if not settings.watermark_secret or not settings.watermark_renderer_enabled:
                 raise PlaybackProviderUnavailable("Server-side watermarking is not ready")
+            if lesson.media_asset_id:
+                generation = self.db.media_generations.find_one(
+                    {
+                        "id": asset.get("published_generation_id"),
+                        "asset_id": asset.get("id"),
+                        "state": "published",
+                        "watermark.mode": "server",
+                    }
+                )
+                if not generation:
+                    raise PlaybackProviderUnavailable(
+                        "Server-side watermark output is not ready"
+                    )
             watermark = build_watermark_identity(user.email, session_id, settings.watermark_secret)
             capabilities["watermark"] = {
                 "mode": "server",

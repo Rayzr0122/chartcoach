@@ -28,11 +28,19 @@ def make_client(tmp_path):
             "encryption": {"type": "development-clear-key", "scheme": "cenc"},
         }
     )
+    db.courses.insert_one({"id": "course-1", "published": True})
+    db.lessons.insert_one(
+        {"id": "lesson-1", "course_id": "course-1", "published": True}
+    )
+    db.enrollments.insert_one(
+        {"user_id": "user-1", "course_id": "course-1", "active": True}
+    )
     db.playback_sessions.insert_one(
         {
             "id": "session-1",
             "user_id": "user-1",
             "lesson_id": "lesson-1",
+            "course_id": "course-1",
             "asset_id": "asset-1",
             "generation_id": "generation-1",
             "status": "active",
@@ -88,3 +96,36 @@ def test_media_delivery_rejects_wrong_user_expiry_rotation_and_traversal(tmp_pat
     )
     assert client.post("/media/playback-sessions/session-1/clearkey", json={}).status_code == 403
     assert client.get("/media/playback-sessions/session-1/%2e%2e/secret").status_code in {403, 404}
+
+
+def test_media_delivery_rechecks_current_enrollment(tmp_path):
+    db, app, client = make_client(tmp_path)
+
+    db.enrollments.update_one(
+        {"user_id": "user-1", "course_id": "course-1"}, {"$set": {"active": False}}
+    )
+    assert client.get("/media/playback-sessions/session-1/master.m3u8").status_code == 403
+
+    app.dependency_overrides[media.get_current_user] = lambda: SimpleNamespace(id="other-user")
+    assert client.post("/media/playback-sessions/session-1/clearkey", json={}).status_code == 403
+
+
+def test_server_watermark_sessions_cannot_receive_unwatermarked_or_mismatched_generation(tmp_path):
+    db, _, client = make_client(tmp_path)
+    db.playback_sessions.update_one(
+        {"id": "session-1"},
+        {"$set": {"watermark_mode": "server", "watermark_forensic_id": "forensic-1"}},
+    )
+    assert client.get("/media/playback-sessions/session-1/master.m3u8").status_code == 403
+
+    db.media_generations.update_one(
+        {"id": "generation-1"},
+        {"$set": {"watermark": {"mode": "server", "forensic_id": "forensic-2"}}},
+    )
+    assert client.get("/media/playback-sessions/session-1/master.m3u8").status_code == 403
+
+    db.media_generations.update_one(
+        {"id": "generation-1"},
+        {"$set": {"watermark": {"mode": "server", "forensic_id": "forensic-1"}}},
+    )
+    assert client.get("/media/playback-sessions/session-1/master.m3u8").status_code == 200

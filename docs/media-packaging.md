@@ -9,6 +9,10 @@ python -m scripts.media caption asset-id "C:\path\to\captions.srt" --language hi
 python -m scripts.media package asset-id --generation generation-id
 ```
 
+For a locally encrypted, session-watermarked generation, use the private-file
+workflow in `docs/server-watermarking.md`. Watermarked packaging is fail-closed:
+it always requires encryption, and production also requires a watermark.
+
 The pipeline creates H.264/AAC renditions at 360p, 720p, and 1080p when the
 source resolution permits them. It never upscales. Ten-second keyframes and
 segments are aligned across renditions. Shaka Packager emits both HLS and DASH,
@@ -40,6 +44,6 @@ returned success. The pipeline now asks Packager for one static final MPD and
 rejects leftover `packager-tempfile-*` files. `pilot-v3` completed without those
 errors.
 
-These packages are unencrypted. Encryption, protected delivery, playback
-sessions, and the development-only Clear Key broker belong to Sprint 4. This
-sprint does not demonstrate Widevine or FairPlay.
+The recorded `pilot-v3` evidence above is unencrypted. The current pipeline also
+supports CENC encryption and pre-encryption server watermark rendering; those
+capabilities do not demonstrate Widevine or FairPlay.

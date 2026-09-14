@@ -2,6 +2,7 @@
 # It creates the app, sets up CORS, and connects all the routes.
 
 from contextlib import asynccontextmanager
+from time import perf_counter
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
@@ -28,6 +29,7 @@ from app.core.errors import (
     generate_request_id,
 )
 from app.database import init_db
+from app.services.drm_readiness import get_drm_readiness
 
 
 @asynccontextmanager
@@ -48,6 +50,15 @@ async def correlation_id_middleware(request, call_next):
     request.state.request_id = request.headers.get("x-request-id") or generate_request_id()
     response = await call_next(request)
     response.headers["x-request-id"] = request.state.request_id
+    return response
+
+
+@app.middleware("http")
+async def server_timing_middleware(request, call_next):
+    started_at = perf_counter()
+    response = await call_next(request)
+    if request.url.path.startswith("/learning/lessons/"):
+        response.headers["Server-Timing"] = f"app;dur={(perf_counter() - started_at) * 1000:.1f}"
     return response
 
 # Wire up rate limiting & standardized error envelopes
@@ -73,6 +84,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Server-Timing", "X-Request-ID"],
 )
 
 # Connect the route files to the app
@@ -94,3 +106,9 @@ app.include_router(market_v1.router)
 def health_check():
     # Simple route to check the API is running
     return {"status": "ok"}
+
+
+@app.get("/health/drm")
+def drm_health_check():
+    """Expose non-secret DRM readiness for local operators and diagnostics."""
+    return get_drm_readiness(settings)

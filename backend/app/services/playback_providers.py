@@ -67,6 +67,9 @@ class CredentialedDrmPlaybackProvider:
             raise PlaybackProviderUnavailable("Credentialed DRM authorization is incomplete")
         if not authorization.get("expires_at"):
             raise PlaybackProviderUnavailable("Credentialed DRM authorization has no expiry")
+        policy = authorization.get("drm_policy")
+        if not isinstance(policy, dict) or policy.get("require_hdcp") is not True:
+            raise PlaybackProviderUnavailable("Credentialed DRM authorization has no capture policy")
         return {
             **authorization,
             "provider": self.name,
@@ -148,6 +151,13 @@ class DevelopmentPlaybackProvider:
             "drm": {
                 "type": "development-clear-key",
                 "license_url": f"{session_root}/clearkey",
+            },
+            # Keep the boundary explicit: local Clear Key is playable for
+            # development, but is not credentialed production DRM.
+            "drm_readiness": {
+                "credentials_status": "pending",
+                "production_ready": False,
+                "mode": "development-clear-key",
             },
         }
 

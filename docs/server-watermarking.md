@@ -1,10 +1,14 @@
 # In-house server watermarking contract
 
-The platform now has the policy boundary for production watermarking, but the
-forensic renderer remains a separately deployable media worker. This separation
-is intentional: a visible overlay and a robust forensic mark must be applied to
-clear media before CENC encryption; adding browser text or HTTP metadata is not
-an equivalent security control.
+The local packaging worker now burns a session-bound visible watermark into
+every rendition before CENC encryption. It uses an ephemeral FFmpeg text input,
+so neither the masked identity nor the watermark secret appears in command
+arguments or media-generation records. The text input is removed immediately
+after transcoding.
+
+This is an in-house visible tracing control, not a claim that browser or
+operating-system screen capture is impossible. A separately validated invisible
+forensic detector remains a later hardening layer.
 
 ## Required worker behavior
 
@@ -14,10 +18,10 @@ For every authorized playback session, the worker must:
    identity from the backend.
 2. Render the masked email continuously into every video rendition, using a
    safe-area position that rotates on a fixed schedule.
-3. Embed the forensic identifier redundantly across frames and, where the
-   detector supports it, audio. The detector must be tested against scaling,
-   re-encoding, bitrate changes, cropping attempts, segment extraction, and
-   screen capture.
+3. Include a shortened session-bound forensic identifier beside the masked
+   identity on every frame. A future invisible detector must be tested against
+   scaling, re-encoding, bitrate changes, cropping attempts, segment extraction,
+   and screen capture before it is described as resilient forensic watermarking.
 4. Produce aligned 10-second segments and encrypt them before publication.
 5. Publish only an immutable, session-scoped generation whose expiry matches
    the authorization session.
@@ -37,6 +41,24 @@ the unwatermarked generation.
   from content keys.
 - Record sanitized render latency, failures, and detector-validation results.
 
-`WATERMARK_MODE=server` is fail-closed until the deployed renderer is enabled.
-The local feasibility proof intentionally keeps it disabled so its Clear Key
-fixture remains available for integration testing.
+## Local operator command
+
+Keep the learner email in a private file outside Git; do not place it directly
+on the command line. From `backend`:
+
+```powershell
+$env:APP_ENVIRONMENT = "development"
+$env:WATERMARK_SECRET = "<local watermark signing secret>"
+$env:LOCAL_MEDIA_WRAPPING_SECRET = "<local key-wrapping secret>"
+python -m scripts.media package <asset-id> `
+  --generation <session-scoped-generation-id> `
+  --encrypt `
+  --watermark-email-file <private-email-file> `
+  --watermark-session <playback-session-id>
+```
+
+The generated overlay remains visible, moves between safe-area corners on a
+fixed schedule, retains the existing aligned 10-second segments, and is
+encrypted only after rendering. A watermarked generation without encryption is
+refused in every environment. Production packaging additionally refuses any
+generation without a server watermark identity.

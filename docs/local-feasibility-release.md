@@ -4,6 +4,21 @@ This release proves the local ChartCoach learner flow with development-only
 Clear Key encryption. It does not prove production DRM, cloud scale, high
 availability, disaster recovery, or Mux retirement.
 
+## Credential-pending operation
+
+Vendor Widevine and FairPlay credentials are not required to run the local
+learner flow. `start-local.ps1` selects `PLAYBACK_PROVIDER=local`, which uses
+the encrypted DASH/Clear Key path for development and test. Authorized
+learners can therefore play the lesson while vendor applications are pending.
+The player labels this mode as development protected playback so it is not
+mistaken for production DRM. Inspect the non-secret readiness snapshot at
+`GET http://127.0.0.1:8000/health/drm`.
+
+This mode must not be enabled in production. The local provider is refused
+outside development/test, and the readiness snapshot remains
+`production_ready: false` until a credentialed provider is available and the
+server-side renderer has passed the production deployment and device gates.
+
 ## Reproduce the learner flow
 
 1. Start the local stack with `./start-local.ps1`.
@@ -29,13 +44,26 @@ generation; it cannot silently fall back to a Mux asset.
 sidebar, and complete the lesson flow: play, change speed, seek, answer each
 required check, leave, reload, and resume.
 
+**Test player** opens the protected local playback route and therefore keeps
+the normal sign-in and enrollment checks. The separate **Preview video (no
+DRM)** link is a development-only plain-video preview for visual checks; it
+does not exercise encrypted playback or grant protected-lesson access.
+
 ## Failure checks
 
+Run `.\verify-local-feasibility.ps1 -IncludePersistence` from the repository
+root for the automated release gate, live credential-pending readiness check,
+and MongoDB persistence check. The complete clean-start procedure, exact
+failure commands, expected results, recovery boundaries, and manual learner
+acceptance are in `docs/local-feasibility-verification.md`.
+
 The automated suite covers corrupt ingestion, duplicate import, interrupted
-jobs, missing package output, traversal attempts, expired/rotated sessions,
-anonymous requests, unenrolled learners, invalid progress, and invalid prompt
-answers. Run it from `backend` with the test settings documented in the test
-environment, then run `npm test -- --run` and `npm run build` from `frontend`.
+leased jobs, interrupted packaging cleanup, missing package output, traversal
+attempts, expired/rotated sessions, anonymous requests, unenrolled learners,
+invalid progress, invalid prompt answers, unavailable local keys, and the
+production watermark fail-safe. Packaging is still a synchronous operator
+command (not an automatically resumed leased job), but failed commands clean
+their unpublished generation before retry.
 
 For a local service incident, inspect `.local/backend.err.log`,
 `.local/frontend.err.log`, Docker Mongo logs, and the media processing job
@@ -54,13 +82,17 @@ Before a credentialed release, retain physical-device evidence for Windows,
 Android, macOS, iPhone, and iPad: packaging, license exchange, renewal, expiry,
 captions, speed changes, seeking, fullscreen, foreground/background behavior,
 and player remounting. Development Clear Key results do not satisfy that gate.
+Use `docs/drm-device-matrix.md` as the status and evidence record. Widevine and
+FairPlay rows remain `CREDENTIAL BLOCKED` until the actual external material is
+available; they cannot be waived by mocks or Clear Key results.
 
 ## Watermarking guardrail
 
-Packaging uses aligned 10-second media segments. Production watermarking is
-fail-closed: set `WATERMARK_MODE=server`, provide a dedicated
-`WATERMARK_SECRET`, and enable the deployed server-side renderer before issuing
-playback sessions. Until that renderer is present, production authorization is
-refused rather than serving unwatermarked media. The session identity primitive
-uses a masked visible label plus a session-bound HMAC forensic identifier; the
-forensic renderer must embed both into clear media before CENC encryption.
+Packaging uses aligned 10-second media segments. The in-house renderer burns a
+masked visible label plus a session-bound HMAC identifier into each clear
+rendition before CENC encryption. Its identity file is ephemeral, and neither
+the learner email nor watermark secret is stored in media-generation records or
+FFmpeg command arguments. Watermarked output without encryption is refused;
+production output without a watermark is also refused. See
+`docs/server-watermarking.md` for the local operator flow and the explicit limit
+on screen-capture prevention claims.

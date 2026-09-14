@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -18,6 +19,7 @@ from app.services.media_keys import DevelopmentKeyBroker, DevelopmentKeyUnavaila
 
 
 router = APIRouter(prefix="/media", tags=["media"])
+_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def get_media_root() -> Path:
@@ -45,6 +47,22 @@ def _authorized_session(db: Any, session_id: str, user: Any) -> dict[str, Any]:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Playback session has expired")
+    lesson = db.lessons.find_one({"id": session.get("lesson_id"), "published": True})
+    if not lesson:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Published lesson is unavailable")
+    course_id = lesson.get("course_id")
+    if session.get("course_id") and session.get("course_id") != course_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Playback session is unavailable")
+    if not course_id or not db.courses.find_one({"id": course_id, "published": True}):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Published lesson is unavailable")
+    if not db.enrollments.find_one(
+        {"user_id": str(user.id), "course_id": course_id, "active": True}
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Active enrollment is required")
+    if not _SAFE_ID.fullmatch(str(session.get("asset_id", ""))) or not _SAFE_ID.fullmatch(
+        str(session.get("generation_id", ""))
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Published media is unavailable")
     asset = db.media_assets.find_one(
         {"id": session.get("asset_id"), "state": "ready", "published_generation_id": session.get("generation_id")}
     )
@@ -53,6 +71,13 @@ def _authorized_session(db: Any, session_id: str, user: Any) -> dict[str, Any]:
     )
     if not asset or not generation:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Published media is unavailable")
+    if session.get("watermark_mode") == "server":
+        watermark = generation.get("watermark") or {}
+        if watermark.get("mode") != "server":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Watermarked media is unavailable")
+        forensic_id = session.get("watermark_forensic_id")
+        if forensic_id and watermark.get("forensic_id") != forensic_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Watermarked media is unavailable")
     return session
 
 
@@ -66,7 +91,7 @@ def deliver_media(
 ):
     session = _authorized_session(db, session_id, user)
     relative = Path(media_path)
-    if relative.is_absolute() or not media_path or ".." in relative.parts:
+    if relative.is_absolute() or not media_path or ".." in relative.parts or "\\" in media_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file was not found")
     package_root = (media_root / "outputs" / session["asset_id"] / session["generation_id"] / "package").resolve()
     target = (package_root / relative).resolve()

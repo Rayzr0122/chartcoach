@@ -28,6 +28,9 @@ class Settings(BaseSettings):
 
     app_environment: str = "development"
     playback_provider: str = "mux"
+    # Vendor DRM credentials may remain pending while local encrypted
+    # playback is used for development verification.
+    drm_credentials_status: str = "pending"
     media_base_url: str = "http://127.0.0.1:8000"
     local_playback_session_minutes: int = 15
     local_media_wrapping_secret: str | None = None

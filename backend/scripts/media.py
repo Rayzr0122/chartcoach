@@ -19,6 +19,7 @@ from app.services.media_ingest import (
 )
 from app.services.media_packaging import MediaPackagingService, validate_generation
 from app.services.media_keys import DevelopmentKeyBroker
+from app.services.watermarking import WatermarkIdentity, build_watermark_identity
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,12 +40,41 @@ def build_parser() -> argparse.ArgumentParser:
     package_command.add_argument("asset_id")
     package_command.add_argument("--generation", required=True)
     package_command.add_argument("--encrypt", action="store_true")
+    package_command.add_argument(
+        "--watermark-email-file",
+        help="Read the learner email from a private local file; never place it on the command line",
+    )
+    package_command.add_argument(
+        "--watermark-session",
+        help="Playback session identifier used to derive the forensic watermark",
+    )
     caption_command = commands.add_parser("caption", help="Attach a timed-text source to an asset")
     caption_command.add_argument("asset_id")
     caption_command.add_argument("source")
     caption_command.add_argument("--language", required=True)
     caption_command.add_argument("--label", required=True)
     return parser
+
+
+def load_watermark_identity(
+    *,
+    email_file: Path | None,
+    playback_session_id: str | None,
+    secret: str | None,
+    environment: str,
+) -> WatermarkIdentity | None:
+    values_present = (email_file is not None, bool(playback_session_id), bool(secret))
+    if not any(values_present):
+        if environment.lower() == "production":
+            raise RuntimeError("Production packaging requires a server watermark identity")
+        return None
+    if not all(values_present):
+        raise RuntimeError(
+            "Watermark packaging requires an email file, playback session, and WATERMARK_SECRET"
+        )
+    assert email_file is not None and playback_session_id is not None and secret is not None
+    email = email_file.read_text(encoding="utf-8").strip()
+    return build_watermark_identity(email, playback_session_id, secret)
 
 
 def main() -> None:
@@ -91,21 +121,32 @@ def main() -> None:
             if not worked:
                 time.sleep(2)
     else:
+        environment = os.getenv("APP_ENVIRONMENT", "development")
+        watermark_identity = load_watermark_identity(
+            email_file=(Path(args.watermark_email_file) if args.watermark_email_file else None),
+            playback_session_id=args.watermark_session,
+            secret=os.getenv("WATERMARK_SECRET"),
+            environment=environment,
+        )
         key_broker = (
             DevelopmentKeyBroker(
                 db,
-                environment=os.getenv("APP_ENVIRONMENT", "development"),
+                environment=environment,
                 wrapping_secret=os.getenv("LOCAL_MEDIA_WRAPPING_SECRET"),
             )
             if args.encrypt
             else None
         )
         generation = MediaPackagingService(
-            db, Path(args.media_root), key_broker=key_broker
+            db,
+            Path(args.media_root),
+            key_broker=key_broker,
+            environment=environment,
         ).package(
             args.asset_id,
             generation_id=args.generation,
             validate=validate_generation,
+            watermark_identity=watermark_identity,
         )
         print(json.dumps({"generation": generation["id"], "state": generation["state"]}))
 

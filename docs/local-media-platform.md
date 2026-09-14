@@ -88,6 +88,10 @@ shutdown preserves the MongoDB volume.
 errors never fall back to it. Local credentials, source lectures, generated
 media, vendor credentials, and SDK packages must remain outside Git.
 
+The local launcher sets `DRM_CREDENTIALS_STATUS=pending` explicitly. This is a
+readiness label only: local encrypted playback remains available for testing,
+while vendor Widevine/FairPlay playback is not considered production-ready.
+
 Widevine and FairPlay applications are an organizational task and run in
 parallel with local engineering. Until approved credentials exist, later local
 encryption uses a clearly labelled development-only path and cannot establish
@@ -117,3 +121,8 @@ operator commands, validation rules, and measured Sprint 3 evidence.
 
 See `docs/local-feasibility-release.md` for the Sprint 5 learner-flow runbook,
 Sprint 6 failure checks, and the explicit boundary before credentialed DRM.
+
+Run `.\verify-local-feasibility.ps1 -IncludePersistence` for the repeatable
+credential-independent release gate. The detailed clean-start and failure
+matrix is in `docs/local-feasibility-verification.md`; physical-device and
+vendor-credential status is tracked in `docs/drm-device-matrix.md`.

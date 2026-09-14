@@ -102,6 +102,17 @@ export default function LessonExperience({
               Watch closely. Explore each chapter. Check your understanding as
               you go.
             </p>
+            {result.authorization.drm_readiness?.credentials_status ===
+              "pending" && (
+              <div
+                role="status"
+                className="mb-6 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900"
+              >
+                <span className="font-semibold">Development protected playback.</span>{" "}
+                Vendor DRM credentials are pending; this local encrypted path
+                is enabled for testing.
+              </div>
+            )}
             <LessonPlayer
               key={`${lessonId}-${retry}`}
               lesson={result.lesson}

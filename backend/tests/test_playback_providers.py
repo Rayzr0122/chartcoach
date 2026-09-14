@@ -35,7 +35,19 @@ class CredentialedAdapterDouble:
             "fairplay_license_url": "https://license.example.test/fairplay",
             "fairplay_certificate_url": "https://license.example.test/fairplay.cer",
             "expires_at": "2099-01-01T00:00:00+00:00",
+            "drm_policy": {
+                "require_hdcp": True,
+                "widevine_video_robustness": "HW_SECURE_ALL",
+                "widevine_audio_robustness": "HW_SECURE_ALL",
+            },
         }
+
+
+class UnsafeCredentialedAdapter(CredentialedAdapterDouble):
+    def authorize(self, asset, lesson_duration_seconds, playback_session_id):
+        result = super().authorize(asset, lesson_duration_seconds, playback_session_id)
+        result.pop("drm_policy")
+        return result
 
 
 def test_migration_creates_one_asset_and_preserves_existing_lesson_identity():
@@ -92,6 +104,11 @@ def test_development_provider_returns_the_neutral_local_contract_in_development(
     }
     assert authorization["manifest_url"] == "http://127.0.0.1:8000/media/playback-sessions/session-1/manifest.mpd"
     assert authorization["expires_at"] != "2099-01-01T00:00:00+00:00"
+    assert authorization["drm_readiness"] == {
+        "credentials_status": "pending",
+        "production_ready": False,
+        "mode": "development-clear-key",
+    }
 
     with pytest.raises(PlaybackProviderUnavailable, match="local asset"):
         provider.authorize(
@@ -119,6 +136,13 @@ def test_credentialed_adapter_contract_preserves_widevine_and_fairplay_urls():
     assert authorization["widevine_license_url"].startswith("https://")
     assert authorization["fairplay_license_url"].startswith("https://")
     assert authorization["fairplay_certificate_url"].startswith("https://")
+    assert authorization["drm_policy"]["require_hdcp"] is True
+
+
+def test_credentialed_adapter_rejects_authorization_without_capture_policy():
+    provider = CredentialedDrmPlaybackProvider(UnsafeCredentialedAdapter())
+    with pytest.raises(PlaybackProviderUnavailable, match="capture policy"):
+        provider.authorize({"id": "asset-1"}, lesson_duration_seconds=60, playback_session_id="session-1")
 
 def test_provider_factory_restricts_local_selection_and_retains_mux_default():
     config = type(
