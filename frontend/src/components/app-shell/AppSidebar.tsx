@@ -73,12 +73,12 @@ export default function AppSidebar({
     },
     {
       label: "Test player",
-      href: "/learn/l1",
+      href: "/learn/price-action-secrets/1",
       icon: BookOpen,
     },
     {
       label: "Preview video (no DRM)",
-      href: "/learn/l1?preview=1",
+      href: "/learn/price-action-secrets/1?preview=1",
       icon: BookOpen,
     },
     {

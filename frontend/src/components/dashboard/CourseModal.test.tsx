@@ -26,7 +26,7 @@ it("opens the pilot video in the dedicated lesson route", () => {
   expect(
     screen
       .getAllByRole("link")
-      .some((link) => link.getAttribute("href") === "/learn/l1"),
+      .some((link) => link.getAttribute("href") === "/learn/price-action-secrets/1"),
   ).toBe(true);
 });
 it("does not offer manual completion for the protected pilot", () => {

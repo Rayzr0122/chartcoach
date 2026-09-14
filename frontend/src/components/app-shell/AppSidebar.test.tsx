@@ -15,6 +15,6 @@ it("opens the protected local player from the dashboard sidebar", () => {
     />,
   );
 
-  expect(screen.getByRole("link", { name: "Test player" })).toHaveAttribute("href", "/learn/l1");
-  expect(screen.getByRole("link", { name: "Preview video (no DRM)" })).toHaveAttribute("href", "/learn/l1?preview=1");
+  expect(screen.getByRole("link", { name: "Test player" })).toHaveAttribute("href", "/learn/price-action-secrets/1");
+  expect(screen.getByRole("link", { name: "Preview video (no DRM)" })).toHaveAttribute("href", "/learn/price-action-secrets/1?preview=1");
 });
