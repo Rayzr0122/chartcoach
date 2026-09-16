@@ -45,13 +45,15 @@ if (-not $localEnvironment.ContainsKey("LOCAL_MEDIA_WRAPPING_SECRET")) {
 }
 
 docker info --format "{{.ServerVersion}}" | Out-Null
-docker compose --env-file $envFile -f (Join-Path $workspace "compose.local.yml") up -d --wait mongo simulator-redis
+docker compose --env-file $envFile -f (Join-Path $workspace "compose.local.yml") up -d --wait mongo simulator-redis simulator-mongo
 
 $databaseUrl = "mongodb://$($localEnvironment.CHARTCOACH_MONGO_USERNAME):$($localEnvironment.CHARTCOACH_MONGO_PASSWORD)@127.0.0.1:27018/?authSource=admin"
 
 $backendEnvironment = @{
     DATABASE_URL = $databaseUrl
     DATABASE_NAME = "chartcoach-local"
+    SIMULATOR_DATABASE_URL = "mongodb://127.0.0.1:27019/?replicaSet=simulator-rs&directConnection=true"
+    SIMULATOR_DATABASE_NAME = "chartcoach_simulator"
     JWT_SECRET_KEY = $localEnvironment.CHARTCOACH_JWT_SECRET
     FRONTEND_ORIGIN = "http://127.0.0.1:3000"
     COOKIE_SECURE = "false"

@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     # Database connection string
     database_url: str
     database_name: str = "chartcoach"
+    simulator_database_url: str = "mongodb://127.0.0.1:27019/?replicaSet=simulator-rs&directConnection=true"
+    simulator_database_name: str = "chartcoach_simulator"
     simulator_redis_url: str = "redis://localhost:6380/0"
 
     # Secret key used to sign login tokens (JWT)
@@ -20,8 +22,9 @@ class Settings(BaseSettings):
     # Allowed frontend origin (for CORS)
     frontend_origin: str = "http://localhost:3000"
 
-    # Polygon.io API key for live financial market data & TradingView charts
-    polygon_api_key: str = "u2kEX_q5yC8uBLevrFS13IjJjVvpe3eL"
+    # Polygon.io API key for live financial market data & TradingView charts.
+    # Configure POLYGON_API_KEY through the backend environment; never commit it.
+    polygon_api_key: str = ""
 
     # Whether the login cookie requires HTTPS. Keep False for local dev over
     # plain http://, but this MUST be True in any real deployment.
