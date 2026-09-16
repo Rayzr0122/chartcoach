@@ -147,6 +147,12 @@ def init_db() -> None:
         ("course_purchases_user_course", db.coursePurchases, [("user_id", pymongo.ASCENDING), ("course_id", pymongo.ASCENDING)], {"unique": True}),
         ("gem_packages_id", db.gemPackages, "package_id", {"unique": True}),
         ("audit_logs_user_timestamp", db.auditLogs, [("user_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)], {}),
+        ("simulator_accounts_learner_mode_status", db.simulator_accounts, [("learner_id", pymongo.ASCENDING), ("mode", pymongo.ASCENDING), ("status", pymongo.ASCENDING)], {}),
+        ("simulator_sessions_learner_created", db.simulator_sessions, [("learner_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)], {}),
+        ("simulator_events_session_sequence", db.simulator_events, [("session_id", pymongo.ASCENDING), ("sequence", pymongo.ASCENDING)], {"unique": True}),
+        ("simulator_idempotency_session_key", db.simulator_idempotency, [("session_id", pymongo.ASCENDING), ("key", pymongo.ASCENDING)], {"unique": True}),
+        ("simulator_command_idempotency_scope_key", db.simulator_command_idempotency, [("session_id", pymongo.ASCENDING), ("scope", pymongo.ASCENDING), ("key", pymongo.ASCENDING)], {"unique": True}),
+        ("simulator_positions_session_instrument", db.simulator_positions, [("session_id", pymongo.ASCENDING), ("instrument_id", pymongo.ASCENDING)], {"unique": True}),
     ]
     for label, collection, keys, options in index_specs:
         try:

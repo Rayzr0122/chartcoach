@@ -7,12 +7,15 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+import asyncio
+from fastapi import APIRouter, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from pymongo.database import Database
 
 from app.api.deps import get_current_user
 from app.database import get_db
+from app.database import db as app_db
+from app.core.security import AUTH_COOKIE_NAME, decode_access_token
 from app.models.user import User
 from app.domain.execution import OrderCommand, Policy, Quote, Side, OrderType, decide_fill
 from app.services.polygon_service import polygon_service
@@ -142,6 +145,16 @@ def _payload_fingerprint(payload: BaseModel) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
+def _emit_event(db: Database, session_id: str, event_type: str, payload: dict) -> dict:
+    sequence = db.simulator_event_counters.find_one_and_update(
+        {"session_id": session_id}, {"$inc": {"sequence": 1}}, upsert=True, return_document=True
+    )["sequence"]
+    event = {"session_id": session_id, "sequence": sequence, "revision": payload.get("revision"), "type": event_type, "payload": payload, "created_at": _now()}
+    db.simulator_events.insert_one(event)
+    event.pop("_id", None)
+    return event
+
+
 @router.get("/bootstrap")
 def bootstrap(user: User = Depends(get_current_user), db: Database = Depends(get_db)):
     user = _require_access(user)
@@ -240,6 +253,7 @@ def control(session_id: str, payload: Control, user: User = Depends(get_current_
     if payload.action == "finish": session["state"] = "finished"
     session["revision"] += 1
     db.simulator_sessions.replace_one({"id": session_id}, session)
+    _emit_event(db, session_id, "session.updated", {"revision": session["revision"], "clock": session["clock"], "state": session["state"], "speed": session["speed"]})
     return _snapshot(db, session)
 
 
@@ -296,6 +310,7 @@ async def create_order(session_id: str, payload: OrderCreate, idempotency_key: s
     db.simulator_orders.insert_one(order)
     response = {key: value for key, value in order.items() if key != "_id"}
     db.simulator_idempotency.insert_one({"session_id": session_id, "key": idempotency_key, "fingerprint": fingerprint, "response": response})
+    _emit_event(db, session_id, "order.updated", {"revision": session["revision"], "order": response})
     return response
 
 
@@ -393,6 +408,33 @@ def journal(session_id: str, payload: JournalUpdate, user: User = Depends(get_cu
     _require_access(user); _session(db, session_id, user.id)
     db.simulator_journals.update_one({"session_id": session_id}, {"$set": {**payload.model_dump(), "updated_at": _now()}}, upsert=True)
     return {"saved": True}
+
+
+@router.websocket("/ws")
+async def simulator_ws(websocket: WebSocket):
+    token = websocket.cookies.get(AUTH_COOKIE_NAME)
+    email = decode_access_token(token) if token else None
+    session_id = websocket.query_params.get("session_id")
+    if not email or not session_id:
+        await websocket.close(code=1008, reason="Authentication and session_id are required")
+        return
+    user = User.from_doc(app_db.users.find_one({"email": email}))
+    session = app_db.simulator_sessions.find_one({"id": session_id, "learner_id": user.id if user else None})
+    if not user or not session or user.subscription_plan not in {"trader", "pro", "elite"}:
+        await websocket.close(code=1008, reason="Simulator access denied")
+        return
+    await websocket.accept()
+    last_sequence = int(websocket.query_params.get("after", "0"))
+    try:
+        await websocket.send_json({"type": "snapshot", "sequence": last_sequence, "payload": _snapshot(app_db, session)})
+        while True:
+            events = list(app_db.simulator_events.find({"session_id": session_id, "sequence": {"$gt": last_sequence}}, {"_id": 0}).sort("sequence", 1))
+            for event in events:
+                await websocket.send_json(event)
+                last_sequence = event["sequence"]
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        return
 
 
 @router.get("/sessions/{session_id}/review")
