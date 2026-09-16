@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api import auth, courses, face, learning, media, monitor, users
+from app.api import auth, courses, face, learning, media, monitor, simulator, users
 from app.api.v1 import (
     courses as courses_v1,
     dashboard as dashboard_v1,
@@ -106,6 +106,8 @@ app.include_router(market_v1.router)
 app.include_router(billing_v1.router)
 app.include_router(gems_v1.router)
 app.include_router(coach_v1.router)
+app.include_router(simulator.router)
+app.include_router(simulator.admin_router)
 
 
 @app.get("/health")
