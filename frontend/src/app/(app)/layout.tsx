@@ -83,6 +83,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       {/* Main Content Shell (offsets for desktop sidebar width) */}
       <div
+        style={{ "--sidebar-offset": collapsed ? "76px" : "240px" } as React.CSSProperties}
         className={`flex-1 flex flex-col min-w-0 transition-all duration-300 ${
           collapsed ? "lg:pl-[76px]" : "lg:pl-60"
         }`}
@@ -91,7 +92,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <AppTopbar user={user} onOpenSecurity={() => setShowFaceSheet(true)} />
 
         {/* Page Content Container */}
-        <main className="flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-7 py-6 pb-24 lg:pb-12">
+        <main className="flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-7 py-6 pb-28 lg:pb-16">
           {children}
         </main>
 

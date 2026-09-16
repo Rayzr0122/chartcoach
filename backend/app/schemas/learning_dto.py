@@ -70,6 +70,10 @@ class CourseUserStateDTO(BaseModel):
     completedLessons: int = 0
     totalLessons: int = 14
     lastAccessedLessonId: Optional[str] = None
+    isLocked: bool = False
+    requiredPlan: str = "basic"
+    requiredPlanName: str = "Basic"
+    state: str = "not_started"  # "not_started" | "in_progress" | "completed" | "locked"
 
 
 class CourseCatalogItemDTO(BaseModel):
@@ -108,6 +112,10 @@ class CourseProgressDTO(BaseModel):
     percent: int
     isEnrolled: bool = False
     levelNumber: int = 1
+    isLocked: bool = False
+    requiredPlan: str = "basic"
+    requiredPlanName: str = "Basic"
+    state: str = "not_started"
 
 
 class LearningActivityDTO(BaseModel):

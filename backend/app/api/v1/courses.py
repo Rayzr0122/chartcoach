@@ -38,8 +38,23 @@ def enroll_course(
 ):
     """
     Explicitly enrolls the authenticated user into a specific course.
-    Idempotent: if already enrolled, returns the existing active enrollment record.
+    Protected server-side by entitlement check. Idempotent: if already enrolled, returns active record.
     """
+    from app.services.entitlement_service import EntitlementService
+
+    entitlements = EntitlementService(db)
+    if not entitlements.is_entitled(current_user, f"course:{course_id}"):
+        req = entitlements.get_required_plan(f"course:{course_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "COURSE_LOCKED",
+                "message": f"This course is available with {req['requiredPlanName']}.",
+                "requiredPlan": req["requiredPlan"],
+                "requiredPlanName": req["requiredPlanName"],
+            },
+        )
+
     service = LearningService(db)
     return service.enroll_course(current_user, course_id)
 

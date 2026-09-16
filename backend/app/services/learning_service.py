@@ -294,12 +294,28 @@ class LearningService:
             for row in self.db.lesson_progress.aggregate(pipeline)
         }
 
+        from app.services.entitlement_service import EntitlementService
+        entitlements = EntitlementService(self.db)
+
         for c in courses:
             c_id = c.get("id")
             total = c.get("lessonCount", 14)
             completed = completed_by_course.get(c_id, 0)
             pct = min(100, int(round((completed / total) * 100))) if total > 0 else 0
             is_enrolled = c_id in enrollments_by_course
+
+            is_entitled = entitlements.is_entitled(user, f"course:{c_id}")
+            req_plan = entitlements.get_required_plan(f"course:{c_id}")
+            is_locked = not is_entitled
+
+            if is_locked:
+                state_str = "locked"
+            elif pct >= 100:
+                state_str = "completed"
+            elif pct > 0:
+                state_str = "in_progress"
+            else:
+                state_str = "not_started"
 
             results.append(
                 CourseProgressDTO(
@@ -310,6 +326,10 @@ class LearningService:
                     percent=pct,
                     isEnrolled=is_enrolled,
                     levelNumber=c.get("levelNumber", 1),
+                    isLocked=is_locked,
+                    requiredPlan=req_plan["requiredPlan"],
+                    requiredPlanName=req_plan["requiredPlanName"],
+                    state=state_str,
                 )
             )
 
@@ -687,6 +707,9 @@ class LearningService:
                 for row in self.db.lesson_progress.aggregate(pipeline)
             }
 
+        from app.services.entitlement_service import EntitlementService
+        entitlements = EntitlementService(self.db)
+
         catalog: List[CourseCatalogItemDTO] = []
         for c in courses:
             c_id = c.get("id")
@@ -695,6 +718,20 @@ class LearningService:
             completed_count = completed_by_course.get(c_id, 0)
             total_count = c.get("lessonCount", 14)
             pct = enrollment.get("progress_percentage", 0) if enrollment else 0
+
+            is_entitled = entitlements.is_entitled(user, f"course:{c_id}")
+            req_plan = entitlements.get_required_plan(f"course:{c_id}")
+            is_locked = not is_entitled
+
+            if is_locked:
+                state_str = "locked"
+            elif pct >= 100:
+                state_str = "completed"
+            elif pct > 0:
+                state_str = "in_progress"
+            else:
+                state_str = "not_started"
+
             if not is_enrolled:
                 status_str = "not_enrolled"
             elif pct >= 100:
@@ -709,6 +746,10 @@ class LearningService:
                 completedLessons=completed_count,
                 totalLessons=total_count,
                 lastAccessedLessonId=enrollment.get("last_accessed_lesson_id") if enrollment else None,
+                isLocked=is_locked,
+                requiredPlan=req_plan["requiredPlan"],
+                requiredPlanName=req_plan["requiredPlanName"],
+                state=state_str,
             )
 
             catalog.append(

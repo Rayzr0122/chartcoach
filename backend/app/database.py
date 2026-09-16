@@ -47,6 +47,24 @@ def init_db() -> None:
         db.ai_messages.create_index([("conversation_id", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)])
         db.notifications.create_index([("user_id", pymongo.ASCENDING), ("read_at", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
         db.session_registrations.create_index([("session_id", pymongo.ASCENDING), ("user_id", pymongo.ASCENDING)], unique=True)
+
+        # Subscriptions & Billing (Phase 1 & Phase 2)
+        db.subscriptionPlans.create_index("slug", unique=True)
+        db.subscriptions.create_index([("user_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
+        db.subscriptions.create_index("razorpay_subscription_id", unique=True, sparse=True)
+        db.payments.create_index("razorpay_payment_id", unique=True, sparse=True)
+        db.payments.create_index([("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
+        db.gemWallets.create_index("user_id", unique=True)
+        db.gemTransactions.create_index([("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
+        db.usageRecords.create_index([("user_id", pymongo.ASCENDING), ("capability", pymongo.ASCENDING)])
+
+        # Phase 2 Indexes
+        db.checkoutSessions.create_index([("user_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)])
+        db.checkoutSessions.create_index("subscription_id", sparse=True)
+        db.coupons.create_index("code", unique=True)
+        db.coursePurchases.create_index([("user_id", pymongo.ASCENDING), ("course_id", pymongo.ASCENDING)], unique=True)
+        db.gemPackages.create_index("package_id", unique=True)
+        db.auditLogs.create_index([("user_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)])
     except Exception as exc:
         print(f"Warning ensuring MongoDB indexes: {exc}")
 

@@ -370,7 +370,16 @@ export default function TradingViewSimulator({ onTradeExecuted }: TradingViewSim
 
       {/* ─── TradingView Canvas ─── */}
       <div className="relative w-full">
-        <div ref={chartContainerRef} className="w-full" style={{ height: "400px" }} />
+        {/* ChartCoach Subtle Official Watermark */}
+        <div className="absolute inset-0 pointer-events-none flex items-center justify-center select-none z-0">
+          <img
+            src="/assets/chartcoach logo final trimmed.png"
+            alt="ChartCoach Watermark"
+            className="w-72 sm:w-96 max-w-[65%] opacity-[0.06] filter brightness-200 pointer-events-none select-none"
+          />
+        </div>
+
+        <div ref={chartContainerRef} className="w-full relative z-10" style={{ height: "400px" }} />
 
         {/* FVG Box Annotation Overlay */}
         {showFVG && selectedAsset === "NIFTY" && (

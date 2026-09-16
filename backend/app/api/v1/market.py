@@ -11,6 +11,7 @@ from app.services.market_service import (
     get_market_service,
     MarketTickerItemDTO,
     MarketOverviewDTO,
+    MarketsPageDTO,
 )
 from app.services.polygon_service import (
     polygon_service,
@@ -20,6 +21,14 @@ from app.services.polygon_service import (
 )
 
 router = APIRouter(prefix="/api/v1/market", tags=["market-v1"])
+
+
+@router.get("/page", response_model=MarketsPageDTO)
+def get_markets_page(response: Response):
+    """Returns the full aggregated Markets page payload in a single round-trip."""
+    response.headers["Cache-Control"] = "public, max-age=15, stale-while-revalidate=45"
+    service = get_market_service()
+    return service.get_markets_page()
 
 
 @router.get("/ticker", response_model=List[MarketTickerItemDTO])

@@ -15,6 +15,9 @@ from app.api.v1 import (
     dashboard as dashboard_v1,
     learning as learning_v1,
     market as market_v1,
+    billing as billing_v1,
+    gems as gems_v1,
+    coach as coach_v1,
 )
 from app.config import settings
 from app.core.face_engine import load_face_app
@@ -76,6 +79,9 @@ app.include_router(dashboard_v1.router)
 app.include_router(learning_v1.router)
 app.include_router(courses_v1.router)
 app.include_router(market_v1.router)
+app.include_router(billing_v1.router)
+app.include_router(gems_v1.router)
+app.include_router(coach_v1.router)
 
 
 @app.get("/health")

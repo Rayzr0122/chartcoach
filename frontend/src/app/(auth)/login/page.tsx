@@ -21,9 +21,15 @@ function LoginForm() {
   const [faceStep, setFaceStep] = useState<"email" | "scan">("email");
   const [faceLoginSuccess, setFaceLoginSuccess] = useState(false);
   const [dismissRegistered, setDismissRegistered] = useState(false);
+  const [dismissSessionNotice, setDismissSessionNotice] = useState(false);
   const [shakeKey, setShakeKey] = useState(0);
 
   const justRegistered = searchParams.get("registered") === "1" && !dismissRegistered && !useFaceLogin;
+  const noticeParam = searchParams.get("notice");
+  const isSessionExpired =
+    !dismissSessionNotice &&
+    !useFaceLogin &&
+    (noticeParam === "session_expired" || searchParams.get("error")?.includes("verify your login"));
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
   function triggerError(msg: string) {
@@ -33,6 +39,7 @@ function LoginForm() {
 
   async function handleFaceLogin(samples: string[][]) {
     setErrorMessage(null);
+    setDismissSessionNotice(true);
     setIsSubmitting(true);
     try {
       await faceLogin(email.trim(), samples[0]);
@@ -52,6 +59,7 @@ function LoginForm() {
     event.preventDefault();
     setErrorMessage(null);
     setDismissRegistered(true);
+    setDismissSessionNotice(true);
     setIsSubmitting(true);
     try {
       await loginUser(email.trim(), password);
@@ -97,6 +105,30 @@ function LoginForm() {
             type="button"
             onClick={() => setDismissRegistered(true)}
             className="text-emerald-600 hover:text-emerald-900 font-bold ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ─── Session Expired / Login Verification Alert ─── */}
+      {isSessionExpired && (
+        <div className="mb-5 flex items-center justify-between gap-2.5 rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-3 text-amber-900 text-xs shadow-sm animate-in fade-in duration-200">
+          <div className="flex items-start gap-2.5">
+            <svg className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <div>
+              <p className="font-bold text-amber-950">Could not verify your login</p>
+              <p className="text-amber-800/90 mt-0.5 font-medium">Please sign in again to access your account.</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDismissSessionNotice(true)}
+            className="text-amber-700 hover:text-amber-950 font-bold ml-2 text-sm px-1"
           >
             ✕
           </button>

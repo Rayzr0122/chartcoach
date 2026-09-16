@@ -47,69 +47,75 @@ const MARKET_ASSET_METADATA: Record<string, { name: string; exchange: string }> 
   SPY: { name: "SPDR S&P 500 ETF Trust", exchange: "NYSE Arca" },
   MSFT: { name: "Microsoft Corporation", exchange: "NASDAQ" },
   INFY: { name: "Infosys Limited", exchange: "NYSE" },
+  XAUUSD: { name: "Gold Spot / US Dollar", exchange: "FOREX" },
 };
 
-// ─── CANDLESTICK CHART THUMBNAIL COMPONENT ───
+// ─── CANDLESTICK CHART THUMBNAIL COMPONENT (16:9 VIDEO LESSON THUMBNAIL) ───
 function CandlestickThumb({ variant = 1 }: { variant?: number }) {
   return (
-    <div className="w-14 h-11 rounded-lg bg-slate-950 border border-slate-800 p-1 flex items-center justify-center shrink-0 overflow-hidden relative shadow-xs">
-      <svg viewBox="0 0 56 40" className="w-full h-full" fill="none">
+    <div className="w-14 sm:w-16 aspect-video rounded-lg bg-slate-950 border border-slate-800 p-1 flex items-center justify-center shrink-0 overflow-hidden relative shadow-xs group-hover:border-slate-700 transition-colors">
+      <svg viewBox="0 0 64 36" className="w-full h-full" fill="none">
         {/* Grid lines */}
-        <line x1="0" y1="10" x2="56" y2="10" stroke="#1e293b" strokeWidth="0.5" strokeDasharray="2 2" />
-        <line x1="0" y1="20" x2="56" y2="20" stroke="#1e293b" strokeWidth="0.5" strokeDasharray="2 2" />
-        <line x1="0" y1="30" x2="56" y2="30" stroke="#1e293b" strokeWidth="0.5" strokeDasharray="2 2" />
+        <line x1="0" y1="9" x2="64" y2="9" stroke="#1e293b" strokeWidth="0.5" strokeDasharray="2 2" />
+        <line x1="0" y1="18" x2="64" y2="18" stroke="#1e293b" strokeWidth="0.5" strokeDasharray="2 2" />
+        <line x1="0" y1="27" x2="64" y2="27" stroke="#1e293b" strokeWidth="0.5" strokeDasharray="2 2" />
 
         {variant === 1 && (
           <>
             {/* Bullish pattern */}
-            <line x1="10" y1="18" x2="10" y2="32" stroke="#10b981" strokeWidth="1" />
-            <rect x="8.5" y="21" width="3" height="8" rx="0.5" fill="#10b981" />
+            <line x1="12" y1="16" x2="12" y2="30" stroke="#10b981" strokeWidth="1" />
+            <rect x="10.5" y="19" width="3" height="8" rx="0.5" fill="#10b981" />
 
-            <line x1="22" y1="12" x2="22" y2="28" stroke="#ef4444" strokeWidth="1" />
-            <rect x="20.5" y="15" width="3" height="10" rx="0.5" fill="#ef4444" />
+            <line x1="26" y1="10" x2="26" y2="26" stroke="#ef4444" strokeWidth="1" />
+            <rect x="24.5" y="13" width="3" height="9" rx="0.5" fill="#ef4444" />
 
-            <line x1="34" y1="8" x2="34" y2="24" stroke="#10b981" strokeWidth="1" />
-            <rect x="32.5" y="11" width="3" height="9" rx="0.5" fill="#10b981" />
+            <line x1="40" y1="7" x2="40" y2="22" stroke="#10b981" strokeWidth="1" />
+            <rect x="38.5" y="10" width="3" height="8" rx="0.5" fill="#10b981" />
 
-            <line x1="46" y1="4" x2="46" y2="20" stroke="#10b981" strokeWidth="1" />
-            <rect x="44.5" y="6" width="3" height="10" rx="0.5" fill="#10b981" />
+            <line x1="54" y1="4" x2="54" y2="18" stroke="#10b981" strokeWidth="1" />
+            <rect x="52.5" y="6" width="3" height="9" rx="0.5" fill="#10b981" />
           </>
         )}
 
         {variant === 2 && (
           <>
             {/* Breakout pattern */}
-            <line x1="8" y1="20" x2="8" y2="30" stroke="#10b981" strokeWidth="1" />
-            <rect x="6.5" y="22" width="3" height="6" rx="0.5" fill="#10b981" />
+            <line x1="12" y1="18" x2="12" y2="28" stroke="#10b981" strokeWidth="1" />
+            <rect x="10.5" y="20" width="3" height="6" rx="0.5" fill="#10b981" />
 
-            <line x1="20" y1="18" x2="20" y2="28" stroke="#10b981" strokeWidth="1" />
-            <rect x="18.5" y="20" width="3" height="5" rx="0.5" fill="#10b981" />
+            <line x1="26" y1="16" x2="26" y2="26" stroke="#10b981" strokeWidth="1" />
+            <rect x="24.5" y="18" width="3" height="5" rx="0.5" fill="#10b981" />
 
-            <line x1="32" y1="14" x2="32" y2="24" stroke="#ef4444" strokeWidth="1" />
-            <rect x="30.5" y="16" width="3" height="5" rx="0.5" fill="#ef4444" />
+            <line x1="40" y1="12" x2="40" y2="22" stroke="#ef4444" strokeWidth="1" />
+            <rect x="38.5" y="14" width="3" height="5" rx="0.5" fill="#ef4444" />
 
-            <line x1="44" y1="4" x2="44" y2="20" stroke="#10b981" strokeWidth="1" />
-            <rect x="42.5" y="6" width="3" height="11" rx="0.5" fill="#10b981" />
+            <line x1="54" y1="3" x2="54" y2="18" stroke="#10b981" strokeWidth="1" />
+            <rect x="52.5" y="5" width="3" height="10" rx="0.5" fill="#10b981" />
           </>
         )}
 
         {variant === 3 && (
           <>
             {/* Risk management consolidation */}
-            <line x1="10" y1="12" x2="10" y2="28" stroke="#10b981" strokeWidth="1" />
-            <rect x="8.5" y="15" width="3" height="9" rx="0.5" fill="#10b981" />
+            <line x1="12" y1="10" x2="12" y2="26" stroke="#10b981" strokeWidth="1" />
+            <rect x="10.5" y="13" width="3" height="8" rx="0.5" fill="#10b981" />
 
-            <line x1="22" y1="14" x2="22" y2="26" stroke="#ef4444" strokeWidth="1" />
-            <rect x="20.5" y="17" width="3" height="6" rx="0.5" fill="#ef4444" />
+            <line x1="26" y1="12" x2="26" y2="24" stroke="#ef4444" strokeWidth="1" />
+            <rect x="24.5" y="15" width="3" height="6" rx="0.5" fill="#ef4444" />
 
-            <line x1="34" y1="16" x2="34" y2="28" stroke="#10b981" strokeWidth="1" />
-            <rect x="32.5" y="19" width="3" height="6" rx="0.5" fill="#10b981" />
+            <line x1="40" y1="14" x2="40" y2="26" stroke="#10b981" strokeWidth="1" />
+            <rect x="38.5" y="17" width="3" height="6" rx="0.5" fill="#10b981" />
 
-            <line x1="46" y1="10" x2="46" y2="24" stroke="#10b981" strokeWidth="1" />
-            <rect x="44.5" y="13" width="3" height="8" rx="0.5" fill="#10b981" />
+            <line x1="54" y1="8" x2="54" y2="22" stroke="#10b981" strokeWidth="1" />
+            <rect x="52.5" y="11" width="3" height="8" rx="0.5" fill="#10b981" />
           </>
         )}
       </svg>
+
+      {/* Subtle play indicator on hover */}
+      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+        <Play className="w-3 h-3 text-white fill-current ml-0.5" />
+      </div>
     </div>
   );
 }
@@ -121,6 +127,69 @@ function NewsThumb({ type = 1 }: { type?: number }) {
     <div className="w-12 h-11 rounded-lg bg-slate-950 border border-slate-800 overflow-hidden shrink-0 relative shadow-2xs">
       <img src={imgSrc} alt="News thumbnail" className="w-full h-full object-cover" />
     </div>
+  );
+}
+
+// ─── LIVE MARKET TICKER CHIP COMPONENT ───
+function TickerChip({
+  item,
+  liveTicks,
+  selectedMarketIndex,
+  setSelectedMarketIndex,
+}: {
+  item: any;
+  liveTicks: Record<string, LiveTick>;
+  selectedMarketIndex: string;
+  setSelectedMarketIndex: (sym: string) => void;
+}) {
+  const sym = item.symbol;
+  const liveItem = liveTicks[sym];
+  const price = liveItem
+    ? `$${liveItem.price.toFixed(2)}`
+    : typeof item.price === "number"
+    ? `$${item.price.toFixed(2)}`
+    : item.price;
+  const changePct = liveItem
+    ? `${liveItem.change_percent >= 0 ? "+" : ""}${liveItem.change_percent.toFixed(2)}%`
+    : typeof item.change_percent === "number"
+    ? `${item.change_percent >= 0 ? "+" : ""}${item.change_percent.toFixed(2)}%`
+    : (item.changePercent !== undefined ? `${item.changePercent >= 0 ? "+" : ""}${item.changePercent.toFixed(2)}%` : "+0.00%");
+  const isPos = liveItem ? liveItem.is_positive : (item.is_positive ?? true);
+  const tickDir = liveItem?.tick_direction;
+  const isSelected = selectedMarketIndex === sym;
+
+  return (
+    <button
+      type="button"
+      onClick={() => setSelectedMarketIndex(sym)}
+      title={`Click to view ${sym} in Market Overview`}
+      className={`inline-flex items-center gap-2 shrink-0 px-2.5 py-1 rounded-lg transition-all text-xs font-mono cursor-pointer ${
+        isSelected
+          ? "bg-blue-50 text-blue-900 ring-1 ring-blue-500/30"
+          : "hover:bg-slate-100/90 text-slate-700"
+      }`}
+    >
+      <span className="font-extrabold text-blue-600 tracking-tight">{sym}</span>
+      <span
+        className={`font-semibold px-1.5 py-0.5 rounded transition-colors duration-300 ${
+          tickDir === "up"
+            ? "text-emerald-700 bg-emerald-100/90"
+            : tickDir === "down"
+            ? "text-rose-700 bg-rose-100/90"
+            : "text-slate-800"
+        }`}
+      >
+        {price}
+      </span>
+      <span
+        className={`inline-flex items-center gap-0.5 text-[11px] font-bold ${
+          isPos ? "text-emerald-600" : "text-rose-600"
+        }`}
+      >
+        {isPos ? "▲" : "▼"} {changePct}
+      </span>
+      <span className="text-slate-200 select-none ml-1">·</span>
+    </button>
   );
 }
 
@@ -225,7 +294,7 @@ export default function DashboardWorkspace({
     let eventSource: EventSource | null = null;
     let tickInterval: NodeJS.Timeout | null = null;
 
-    const symbols = ["NVDA", "AAPL", "TSLA", "SPY", "MSFT", "AMZN", "INFY"];
+    const symbols = ["NVDA", "AAPL", "TSLA", "SPY", "MSFT", "AMZN", "INFY", "XAUUSD"];
 
     // 1. Server-Sent Events (SSE) Stream
     try {
@@ -411,6 +480,7 @@ export default function DashboardWorkspace({
       case "AMZN": return "bg-amber-600 text-white";
       case "INFY": return "bg-sky-600 text-white";
       case "SPY": return "bg-purple-600 text-white";
+      case "XAUUSD": return "bg-amber-500 text-white";
       default: return "bg-indigo-600 text-white";
     }
   };
@@ -453,6 +523,7 @@ export default function DashboardWorkspace({
     { symbol: "MSFT", name: "Microsoft", price: 493.95, change: 0.94, change_percent: 0.19, is_positive: true, open: 493.01, high: 495.19, low: 490.15, prev_close: 493.01, volume: 18882338, updated_at: Date.now() },
     { symbol: "AMZN", name: "Amazon", price: 256.97, change: 0.30, change_percent: 0.12, is_positive: true, open: 256.68, high: 257.99, low: 254.75, prev_close: 256.68, volume: 29397994, updated_at: Date.now() },
     { symbol: "INFY", name: "Infosys", price: 11.15, change: 0.02, change_percent: 0.18, is_positive: true, open: 11.13, high: 11.18, low: 11.12, prev_close: 11.13, volume: 4500000, updated_at: Date.now() },
+    { symbol: "XAUUSD", name: "Gold Spot (USD)", price: 2655.80, change: 12.40, change_percent: 0.47, is_positive: true, open: 2643.40, high: 2662.10, low: 2640.20, prev_close: 2643.40, volume: 850000, updated_at: Date.now() },
   ];
 
   const tickerItems = liveTicker.length > 0 ? liveTicker : defaultTicker;
@@ -480,168 +551,183 @@ export default function DashboardWorkspace({
         </div>
       </div>
 
-      {/* ─── ROW 1: LEARNING HUB (3 COLUMNS) ─── */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        {/* CARD 1: CONTINUE LEARNING (Span 5) */}
-        <div className="lg:col-span-5 bg-white border border-slate-200/90 rounded-2xl p-4.5 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
-            <BookOpen className="w-4 h-4 text-blue-600" />
-            <span>Continue Learning</span>
-          </div>
+      {/* ─── ROW 1: LEARNING HUB (HIGHLIGHTED HERO SECTION) ─── */}
+      <section className="relative rounded-3xl p-4 sm:p-5 bg-gradient-to-br from-blue-50/90 via-indigo-50/45 to-sky-50/70 border border-blue-200/85 shadow-xs overflow-hidden">
+        {/* Subtle ambient glows */}
+        <div className="absolute -top-24 -right-24 w-80 h-80 bg-blue-400/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-24 -left-24 w-80 h-80 bg-indigo-400/15 rounded-full blur-3xl pointer-events-none" />
 
-          <div className="mt-4 flex flex-col sm:flex-row gap-4 items-stretch">
-            {/* Left Video Thumbnail with duration badge and play icon */}
-            <div className="relative w-full sm:w-52 h-36 sm:h-auto min-h-[142px] rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shrink-0 flex items-center justify-center group shadow-xs">
-              <img
-                src="/images/dashboard/instructor_thumbnail.jpg"
-                alt="Support and Resistance Explained"
-                className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/20" />
-
-              {/* Center Play Button */}
-              <Link
-                href={continueHref}
-                aria-label="Play video"
-                className="relative z-10 w-11 h-11 rounded-full bg-white/95 hover:bg-white text-slate-900 flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform cursor-pointer"
-              >
-                <Play className="w-4 h-4 fill-current ml-0.5" />
-              </Link>
-
-              {/* Duration Badge Bottom Right */}
-              <span className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-mono text-white font-semibold shadow-xs">
-                24:18
+        <div className="relative grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5">
+          {/* CARD 1: CONTINUE LEARNING (Span 5) */}
+          <div className="lg:col-span-5 bg-white/95 backdrop-blur-xs border border-blue-200/90 rounded-2xl p-4 sm:p-4.5 shadow-xs hover:shadow-sm transition-all flex flex-col justify-between ring-1 ring-blue-500/10">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
+                <BookOpen className="w-4 h-4 text-blue-600" />
+                <span>Continue Learning</span>
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-200/60">
+                Featured
               </span>
             </div>
 
-            {/* Right Course & Lesson Details */}
-            <div className="flex-1 flex flex-col justify-between py-0.5 min-w-0">
-              <div>
-                <div className="flex items-center gap-1.5 text-xs truncate">
-                  <span className="font-bold text-blue-600">{lessonCategory}</span>
-                  <span className="text-slate-300">·</span>
-                  <span className="text-slate-400 font-medium">{lessonNumberLabel}</span>
-                </div>
+            <div className="mt-3.5 flex flex-col sm:flex-row gap-3.5 items-start sm:items-center">
+              {/* Left Video Thumbnail - STRICT 16:9 ASPECT RATIO */}
+              <div className="relative w-full sm:w-48 md:w-52 aspect-video shrink-0 self-center rounded-xl overflow-hidden bg-slate-950 border border-slate-800 flex items-center justify-center group shadow-xs">
+                <img
+                  src="/images/dashboard/instructor_thumbnail.jpg"
+                  alt="Support and Resistance Explained"
+                  className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/20" />
 
-                <h3 className="text-sm font-extrabold text-slate-900 mt-1 leading-snug">
-                  {lessonTitle}
-                </h3>
-
-                <p className="text-[11px] text-slate-500 mt-1 leading-relaxed line-clamp-2">
-                  {courseDescription}
-                </p>
-              </div>
-
-              <div className="mt-2.5 space-y-2">
-                {/* Progress Bar with label */}
-                <div>
-                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-blue-600 rounded-full transition-all duration-500"
-                      style={{ width: `${lessonProgressPercent}%` }}
-                    />
-                  </div>
-                  <span className="text-[10px] font-semibold text-slate-400 mt-1 block">
-                    {lessonProgressPercent}% complete
-                  </span>
-                </div>
-
-                {/* Continue Watching / Start Course Button */}
+                {/* Center Play Button */}
                 <Link
                   href={continueHref}
-                  className="inline-flex items-center justify-center gap-2 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all cursor-pointer w-fit"
+                  aria-label="Play video"
+                  className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 w-11 h-11 rounded-full bg-white/95 hover:bg-white text-slate-900 flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform cursor-pointer"
                 >
-                  <span>{continueActionText}</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
+                  <Play className="w-4.5 h-4.5 fill-current ml-0.5 text-slate-900" />
                 </Link>
+
+                {/* Duration Badge Bottom Right */}
+                <span className="absolute bottom-2 right-2 z-10 px-1.5 py-0.5 rounded-md bg-black/80 text-[10px] font-mono text-white font-semibold shadow-xs">
+                  24:18
+                </span>
               </div>
-            </div>
-          </div>
-        </div>
 
-        {/* CARD 2: UP NEXT (Span 4) */}
-        <div className="lg:col-span-4 bg-white border border-slate-200/90 rounded-2xl p-4.5 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
-            <TrendingUp className="w-4 h-4 text-blue-600" />
-            <span>Up Next</span>
-          </div>
+              {/* Right Course & Lesson Details */}
+              <div className="flex-1 flex flex-col justify-between py-0.5 min-w-0 w-full">
+                <div>
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="font-bold text-blue-600 shrink-0">
+                      {currentLearning ? currentLearning.courseTitle : "Trading 101"}
+                    </span>
+                    <span className="text-slate-300 shrink-0">·</span>
+                    <span className="text-slate-400 font-medium text-[11px] shrink-0 whitespace-nowrap">
+                      {lessonNumberLabel}
+                    </span>
+                  </div>
 
-          <div className="mt-3 divide-y divide-slate-100 flex-1 flex flex-col justify-around">
-            {dynamicUpNext.map((lesson: any, idx: number) => (
-              <Link
-                key={lesson.id || idx}
-                href={`/learn/courses/${lesson.courseId || "trading-101"}/lessons/${lesson.id}`}
-                className="group flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
-              >
-                <CandlestickThumb variant={((idx % 3) + 1) as 1 | 2 | 3} />
-                <div className="min-w-0 flex-1">
-                  <h4 className="text-xs font-bold text-slate-900 group-hover:text-blue-600 transition-colors whitespace-nowrap overflow-hidden text-ellipsis">
-                    {lesson.title}
-                  </h4>
-                  <p className="text-[11px] text-slate-400 font-medium mt-0.5">
-                    Lesson {lesson.order ?? idx + 2} · {lesson.durationMinutes ?? 20} min
+                  <h3 className="text-sm font-extrabold text-slate-900 mt-1 leading-snug line-clamp-2">
+                    {lessonTitle}
+                  </h3>
+
+                  <p className="text-[11px] text-slate-500 mt-1 leading-relaxed line-clamp-2">
+                    {courseDescription}
                   </p>
                 </div>
-              </Link>
-            ))}
-          </div>
-        </div>
 
-        {/* CARD 3: YOUR LEARNING JOURNEY (Span 3) */}
-        <div className="lg:col-span-3 bg-white border border-slate-200/90 rounded-2xl p-4.5 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
-            <GraduationCap className="w-4 h-4 text-blue-600" />
-            <span>Your Learning Journey</span>
-          </div>
+                <div className="mt-2.5 space-y-2">
+                  {/* Progress Bar with label */}
+                  <div>
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-blue-600 rounded-full transition-all duration-500"
+                        style={{ width: `${lessonProgressPercent}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-semibold text-slate-400 mt-1 block">
+                      {lessonProgressPercent}% complete
+                    </span>
+                  </div>
 
-          {/* Donut Progress Ring */}
-          <div className="flex items-center justify-center gap-4 py-4 my-auto">
-            <div className="relative w-20 h-20 shrink-0">
-              <svg className="w-full h-full -rotate-90" viewBox="0 0 80 80">
-                {/* Background Ring */}
-                <circle
-                  cx="40"
-                  cy="40"
-                  r="34"
-                  className="text-blue-100"
-                  strokeWidth="7"
-                  stroke="currentColor"
-                  fill="transparent"
-                />
-                {/* Progress Arc */}
-                <circle
-                  cx="40"
-                  cy="40"
-                  r="34"
-                  className="text-blue-600"
-                  strokeWidth="7"
-                  strokeDasharray={ringCircumference}
-                  strokeDashoffset={strokeDashoffset}
-                  strokeLinecap="round"
-                  stroke="currentColor"
-                  fill="transparent"
-                />
-              </svg>
-            </div>
-
-            <div className="text-left">
-              <div className="text-2xl font-black tracking-tight text-slate-900">
-                {completedLessons} / {totalLessons}
+                  {/* Continue Watching / Start Course Button */}
+                  <Link
+                    href={continueHref}
+                    className="inline-flex items-center justify-center gap-2 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all cursor-pointer w-fit"
+                  >
+                    <span>{continueActionText}</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
               </div>
-              <p className="text-xs font-semibold text-slate-400 mt-0.5">
-                Lessons Completed
-              </p>
             </div>
           </div>
 
-          {/* Go to Learn Button */}
-          <Link
-            href="/learn/courses"
-            className="w-full py-2.5 px-3 rounded-xl border border-slate-200 hover:border-blue-300 hover:bg-blue-50/50 text-blue-600 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-all shadow-2xs"
-          >
-            <span>Go to Learn</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </Link>
+          {/* CARD 2: UP NEXT (Span 4) */}
+          <div className="lg:col-span-4 bg-white/95 backdrop-blur-xs border border-slate-200/90 rounded-2xl p-4 sm:p-4.5 shadow-xs hover:shadow-sm transition-all flex flex-col justify-between">
+            <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
+              <TrendingUp className="w-4 h-4 text-blue-600" />
+              <span>Up Next</span>
+            </div>
+
+            <div className="mt-3 divide-y divide-slate-100 flex-1 flex flex-col justify-around">
+              {dynamicUpNext.map((lesson: any, idx: number) => (
+                <Link
+                  key={lesson.id || idx}
+                  href={`/learn/courses/${lesson.courseId || "trading-101"}/lessons/${lesson.id}`}
+                  className="group flex items-center gap-3 py-2 first:pt-0 last:pb-0"
+                >
+                  <CandlestickThumb variant={((idx % 3) + 1) as 1 | 2 | 3} />
+                  <div className="min-w-0 flex-1">
+                    <h4 className="text-xs font-bold text-slate-900 group-hover:text-blue-600 transition-colors line-clamp-1">
+                      {lesson.title}
+                    </h4>
+                    <p className="text-[11px] text-slate-400 font-medium mt-0.5">
+                      Lesson {lesson.order ?? idx + 2} · {lesson.durationMinutes ?? 20} min
+                    </p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          {/* CARD 3: YOUR LEARNING JOURNEY (Span 3) */}
+          <div className="lg:col-span-3 bg-white/95 backdrop-blur-xs border border-slate-200/90 rounded-2xl p-4 sm:p-4.5 shadow-xs hover:shadow-sm transition-all flex flex-col justify-between">
+            <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
+              <GraduationCap className="w-4 h-4 text-blue-600" />
+              <span>Your Learning Journey</span>
+            </div>
+
+            {/* Donut Progress Ring */}
+            <div className="flex items-center justify-center gap-4 py-3 my-auto">
+              <div className="relative w-20 h-20 shrink-0">
+                <svg className="w-full h-full -rotate-90" viewBox="0 0 80 80">
+                  {/* Background Ring */}
+                  <circle
+                    cx="40"
+                    cy="40"
+                    r="34"
+                    className="text-blue-100"
+                    strokeWidth="7"
+                    stroke="currentColor"
+                    fill="transparent"
+                  />
+                  {/* Progress Arc */}
+                  <circle
+                    cx="40"
+                    cy="40"
+                    r="34"
+                    className="text-blue-600"
+                    strokeWidth="7"
+                    strokeDasharray={ringCircumference}
+                    strokeDashoffset={strokeDashoffset}
+                    strokeLinecap="round"
+                    stroke="currentColor"
+                    fill="transparent"
+                  />
+                </svg>
+              </div>
+
+              <div className="text-left">
+                <div className="text-2xl font-black tracking-tight text-slate-900">
+                  {completedLessons} / {totalLessons}
+                </div>
+                <p className="text-xs font-semibold text-slate-400 mt-0.5">
+                  Lessons Completed
+                </p>
+              </div>
+            </div>
+
+            {/* Go to Learn Button */}
+            <Link
+              href="/learn/courses"
+              className="w-full py-2.5 px-3 rounded-xl border border-slate-200 hover:border-blue-300 hover:bg-blue-50/50 text-blue-600 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-all shadow-2xs"
+            >
+              <span>Go to Learn</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
         </div>
       </section>
 
@@ -679,8 +765,12 @@ export default function DashboardWorkspace({
             {/* ─── Top Header: ChartCoach Brand & Asset Switcher ─── */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center text-white font-black text-xs shadow-xs ring-1 ring-blue-500/20 shrink-0">
-                  CC
+                <div className="w-8 h-8 rounded-xl bg-slate-50 border border-slate-200/80 p-1 flex items-center justify-center shadow-2xs shrink-0">
+                  <img
+                    src="/assets/chartcoach_icon.png"
+                    alt="ChartCoach"
+                    className="w-full h-full object-contain"
+                  />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -701,7 +791,7 @@ export default function DashboardWorkspace({
 
               {/* Asset Selector Segmented Bar */}
               <div className="flex items-center bg-slate-100/80 p-1 rounded-xl border border-slate-200/70 gap-0.5 overflow-x-auto custom-scrollbar">
-                {["NVDA", "AAPL", "TSLA", "SPY", "MSFT", "INFY"].map((idx) => {
+                {["NVDA", "AAPL", "TSLA", "SPY", "MSFT", "INFY", "XAUUSD"].map((idx) => {
                   const isSelected = selectedMarketIndex === idx;
                   return (
                     <button
@@ -938,59 +1028,67 @@ export default function DashboardWorkspace({
         </div>
       </section>
 
-      {/* ─── ROW 4: LIVE MARKET TICKER STRIP ─── */}
-      <footer className="bg-white border border-slate-200/90 rounded-2xl px-4 py-2.5 shadow-xs flex items-center justify-between gap-3 overflow-hidden">
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-xs font-bold text-slate-900 whitespace-nowrap">Live Market</span>
+      {/* ─── ROW 4: PINNED BOTTOM LIVE MARKET TICKER STRIP (INFINITE SEAMLESS MARQUEE) ─── */}
+      <footer className="fixed bottom-14 lg:bottom-0 left-0 right-0 lg:left-[var(--sidebar-offset,240px)] z-30 transition-all duration-300 bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-[0_-4px_24px_rgba(15,23,42,0.06)]">
+        <div className="h-10 sm:h-11 flex items-center justify-between overflow-hidden relative select-none">
+          {/* Left Live Badge */}
+          <div className="flex items-center gap-2 pl-3 sm:pl-4 pr-3 shrink-0 border-r border-slate-200/80 bg-white/95 z-20 h-full">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            </span>
+            <span className="text-[11px] font-extrabold tracking-wider uppercase text-slate-900 whitespace-nowrap">
+              Live Market
+            </span>
+            <span className="hidden md:inline-flex items-center px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[9px] font-bold uppercase tracking-wider border border-emerald-200/60">
+              Feed
+            </span>
+          </div>
+
+          {/* Scrolling Marquee Area */}
+          <div className="relative flex-1 overflow-hidden h-full flex items-center ticker-marquee-wrapper">
+            {/* Left Edge Gradient Fade Mask */}
+            <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-8 sm:w-14 bg-gradient-to-r from-white via-white/80 to-transparent z-10" />
+
+            {/* Infinite Marquee Track (Double duplicate for seamless continuous loop) */}
+            <div className="animate-ticker-marquee flex items-center gap-2 text-xs font-mono py-1 px-4 cursor-pointer">
+              {/* Set 1 */}
+              {[...tickerItems, ...tickerItems].map((item: any, idx: number) => (
+                <TickerChip
+                  key={`marquee-1-${item.symbol || idx}-${idx}`}
+                  item={item}
+                  liveTicks={liveTicks}
+                  selectedMarketIndex={selectedMarketIndex}
+                  setSelectedMarketIndex={setSelectedMarketIndex}
+                />
+              ))}
+              {/* Set 2 (Identical for seamless wrap without jump) */}
+              {[...tickerItems, ...tickerItems].map((item: any, idx: number) => (
+                <TickerChip
+                  key={`marquee-2-${item.symbol || idx}-${idx}`}
+                  item={item}
+                  liveTicks={liveTicks}
+                  selectedMarketIndex={selectedMarketIndex}
+                  setSelectedMarketIndex={setSelectedMarketIndex}
+                />
+              ))}
+            </div>
+
+            {/* Right Edge Gradient Fade Mask */}
+            <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 sm:w-14 bg-gradient-to-l from-white via-white/80 to-transparent z-10" />
+          </div>
+
+          {/* Right Action Link */}
+          <div className="flex items-center gap-2 pl-3 pr-3 sm:pr-4 shrink-0 border-l border-slate-200/80 bg-white/95 z-20 h-full">
+            <Link
+              href="/market"
+              className="inline-flex items-center gap-1.5 text-[11px] font-bold text-blue-600 hover:text-blue-700 transition-colors whitespace-nowrap group"
+            >
+              <span>All Markets</span>
+              <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+            </Link>
+          </div>
         </div>
-
-        <div className="flex items-center gap-4 lg:gap-5 overflow-x-auto no-scrollbar text-xs font-mono py-0.5 px-2">
-          {tickerItems.map((item: any, idx: number) => {
-            const sym = item.symbol;
-            const liveItem = liveTicks[sym];
-            const price = liveItem
-              ? `$${liveItem.price.toFixed(2)}`
-              : typeof item.price === "number"
-              ? `$${item.price.toFixed(2)}`
-              : item.price;
-            const changePct = liveItem
-              ? `${liveItem.change_percent >= 0 ? "+" : ""}${liveItem.change_percent.toFixed(2)}%`
-              : typeof item.change_percent === "number"
-              ? `${item.change_percent >= 0 ? "+" : ""}${item.change_percent.toFixed(2)}%`
-              : (item.changePercent !== undefined ? `${item.changePercent >= 0 ? "+" : ""}${item.changePercent.toFixed(2)}%` : "+0.00%");
-            const isPos = liveItem ? liveItem.is_positive : (item.is_positive ?? true);
-            const tickDir = liveItem?.tick_direction;
-
-            return (
-              <span
-                key={sym || idx}
-                onClick={() => setSelectedMarketIndex(sym)}
-                className="flex items-center gap-1.5 shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
-              >
-                <span className="font-bold text-blue-600">{sym}</span>
-                <span className={`font-semibold px-1 rounded transition-colors duration-300 ${
-                  tickDir === "up" ? "text-emerald-700 bg-emerald-100" :
-                  tickDir === "down" ? "text-rose-700 bg-rose-100" :
-                  "text-slate-800"
-                }`}>
-                  {price}
-                </span>
-                <span className={`${isPos ? "text-emerald-600" : "text-rose-600"} font-bold`}>
-                  {isPos ? "▲" : "▼"} {changePct}
-                </span>
-              </span>
-            );
-          })}
-        </div>
-
-        <Link
-          href="/market"
-          className="text-xs font-bold text-blue-600 hover:text-blue-700 shrink-0 flex items-center gap-1"
-        >
-          <span>View More</span>
-          <ArrowRight className="w-3 h-3" />
-        </Link>
       </footer>
     </div>
   );

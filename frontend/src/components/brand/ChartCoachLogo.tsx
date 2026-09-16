@@ -12,19 +12,12 @@ interface LogoProps {
 
 export function LogoIcon({ className = "w-8 h-8" }: { className?: string }) {
   return (
-    <div className={`relative shrink-0 ${className}`}>
-      <svg
-        viewBox="0 0 32 32"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        className="w-full h-full"
-      >
-        {/* 4 Ascending Vibrant Blue Bars */}
-        <rect x="2" y="18" width="5" height="11" rx="2.5" fill="#2563EB" />
-        <rect x="9.5" y="13" width="5" height="16" rx="2.5" fill="#2563EB" />
-        <rect x="17" y="8" width="5" height="21" rx="2.5" fill="#2563EB" />
-        <rect x="24.5" y="3" width="5" height="26" rx="2.5" fill="#2563EB" />
-      </svg>
+    <div className={`relative shrink-0 flex items-center justify-center ${className}`}>
+      <img
+        src="/assets/chartcoach_icon.png"
+        alt="ChartCoach"
+        className="w-full h-full object-contain select-none pointer-events-none"
+      />
     </div>
   );
 }
@@ -36,31 +29,28 @@ export default function ChartCoachLogo({
   className = "",
   href = "/dashboard",
 }: LogoProps) {
-  const iconSizeClasses = {
-    sm: "w-6 h-6",
-    md: "w-7 h-7",
-    lg: "w-9 h-9",
-  };
-
-  const textClasses = {
-    sm: "text-sm",
-    md: "text-base",
-    lg: "text-lg",
+  const heightClasses = {
+    sm: "h-6 sm:h-7",
+    md: "h-7 sm:h-8",
+    lg: "h-8 sm:h-9",
   };
 
   const content = (
-    <div className={`flex items-center gap-2.5 transition-opacity ${className}`}>
-      <LogoIcon className={iconSizeClasses[size]} />
-
-      {showText && !collapsed && (
-        <div className="flex flex-col leading-tight">
-          <span className={`font-bold tracking-tight text-slate-900 ${textClasses[size]}`}>
-            ChartCoach
-          </span>
-          <span className="text-[10px] font-medium text-slate-400 whitespace-nowrap">
-            Learn. Analyse. Trade Smarter.
-          </span>
+    <div className={`flex items-center transition-opacity ${className}`}>
+      {collapsed ? (
+        <div className="w-10 h-10 flex items-center justify-center mx-auto">
+          <img
+            src="/assets/chartcoach_icon.png"
+            alt="ChartCoach"
+            className="w-8 h-8 object-contain select-none pointer-events-none"
+          />
         </div>
+      ) : (
+        <img
+          src="/assets/chartcoach logo final trimmed.png"
+          alt="ChartCoach - Your Personal AI Coach"
+          className={`${heightClasses[size]} w-auto max-w-[170px] object-contain select-none pointer-events-none`}
+        />
       )}
     </div>
   );

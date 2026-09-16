@@ -64,3 +64,32 @@ def get_optional_current_user(
         return None
 
     return user
+
+
+def require_entitlement(capability: str):
+    """
+    FastAPI route dependency ensuring the current user is entitled to a capability.
+    Returns 403 Forbidden with actionable upgrade metadata if unauthorized.
+    """
+    def dependency(
+        current_user: User = Depends(get_current_user),
+        db: Database = Depends(get_db),
+    ) -> User:
+        from app.services.entitlement_service import EntitlementService
+
+        service = EntitlementService(db)
+        if not service.is_entitled(current_user, capability):
+            req = service.get_required_plan(capability)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "ENTITLEMENT_REQUIRED",
+                    "message": f"This feature requires the {req['requiredPlanName']} plan or higher.",
+                    "capability": capability,
+                    "requiredPlan": req["requiredPlan"],
+                    "requiredPlanName": req["requiredPlanName"],
+                },
+            )
+        return current_user
+
+    return dependency

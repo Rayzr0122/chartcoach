@@ -25,6 +25,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Listen for unauthorized session broadcast events
+  useEffect(() => {
+    function onUnauthorized() {
+      setUser(null);
+    }
+    window.addEventListener("chartcoach:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("chartcoach:unauthorized", onUnauthorized);
+  }, []);
+
   // On first load, ask the backend who we are. The browser sends the login
   // cookie automatically if there is one — no cookie means we get a 401 and
   // just show the logged-out state.
@@ -33,7 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     async function loadSession() {
       try {
-        const currentUser = await fetchCurrentUser();
+        const currentUser = await fetchCurrentUser(true);
         if (!cancelled) setUser(currentUser);
       } catch {
         // No valid session — that's fine, the user just isn't logged in yet

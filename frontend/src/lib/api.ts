@@ -31,28 +31,71 @@ export class ApiError extends Error {
   }
 }
 
+let isRedirectingToLogin = false;
+
+// When login cannot be verified or session expires on a protected endpoint,
+// automatically clear local user state and redirect to the sign-in page.
+export function handleUnauthorizedSession(message?: string) {
+  if (typeof window === "undefined") return;
+
+  // Never redirect if already on login or register page
+  if (window.location.pathname.startsWith("/login") || window.location.pathname.startsWith("/register")) {
+    return;
+  }
+
+  if (isRedirectingToLogin) return;
+  isRedirectingToLogin = true;
+
+  try {
+    // Notify AuthContext and other components to immediately wipe user state
+    window.dispatchEvent(
+      new CustomEvent("chartcoach:unauthorized", {
+        detail: { message: message || "Could not verify your login. Please log in again." },
+      })
+    );
+
+    // Wipe cookie in the background
+    fetch(`${API_URL}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
+  } finally {
+    const encodedNotice = encodeURIComponent("session_expired");
+    window.location.href = `/login?notice=${encodedNotice}`;
+  }
+}
+
 // Reads the error message FastAPI sends back, or falls back to a generic one
-async function readErrorMessage(response: Response): Promise<string> {
+async function readErrorMessage(
+  response: Response,
+  isAuthAttempt = false,
+  silent = false
+): Promise<string> {
+  let message = "Something went wrong. Please try again.";
+
   try {
     const data = await response.json();
 
     if (data?.error?.message && typeof data.error.message === "string") {
-      return data.error.message;
-    }
-
-    if (typeof data.detail === "string") return data.detail;
-
-    // FastAPI sends validation errors (HTTP 422) as a list of objects
-    // instead of a plain string, e.g. [{ msg: "...", loc: [...] }]
-    if (Array.isArray(data.detail) && data.detail.length > 0) {
+      message = data.error.message;
+    } else if (typeof data.detail === "string") {
+      message = data.detail;
+    } else if (Array.isArray(data.detail) && data.detail.length > 0) {
       const first = data.detail[0];
-      if (typeof first?.msg === "string") return first.msg;
+      if (typeof first?.msg === "string") message = first.msg;
     }
-
-    return "Something went wrong. Please try again.";
   } catch {
-    return "Something went wrong. Please try again.";
+    // fallback default
   }
+
+  // Check if this response indicates unverified or expired login credentials
+  const isAuthFailure =
+    response.status === 401 ||
+    message.toLowerCase().includes("could not verify your login") ||
+    message.toLowerCase().includes("please log in again");
+
+  if (isAuthFailure && !isAuthAttempt && !silent) {
+    handleUnauthorizedSession(message);
+  }
+
+  return message;
 }
 
 export async function registerUser(email: string, fullName: string, password: string): Promise<User> {
@@ -63,7 +106,7 @@ export async function registerUser(email: string, fullName: string, password: st
   });
 
   if (!response.ok) {
-    throw new ApiError(await readErrorMessage(response), response.status);
+    throw new ApiError(await readErrorMessage(response, true), response.status);
   }
 
   return response.json();
@@ -83,7 +126,7 @@ export async function loginUser(email: string, password: string): Promise<void> 
   });
 
   if (!response.ok) {
-    throw new ApiError(await readErrorMessage(response), response.status);
+    throw new ApiError(await readErrorMessage(response, true), response.status);
   }
   // The login cookie is now set by the browser — nothing else to do here.
 }
@@ -100,7 +143,7 @@ export async function faceLogin(email: string, images: string[]): Promise<void> 
   });
 
   if (!response.ok) {
-    throw new ApiError(await readErrorMessage(response), response.status);
+    throw new ApiError(await readErrorMessage(response, true), response.status);
   }
 }
 
@@ -108,11 +151,11 @@ export async function logoutUser(): Promise<void> {
   await fetch(`${API_URL}/auth/logout`, { method: "POST", credentials: "include" });
 }
 
-export async function fetchCurrentUser(): Promise<User> {
+export async function fetchCurrentUser(silent = false): Promise<User> {
   const response = await fetch(`${API_URL}/users/me`, { credentials: "include" });
 
   if (!response.ok) {
-    throw new ApiError(await readErrorMessage(response), response.status);
+    throw new ApiError(await readErrorMessage(response, false, silent), response.status);
   }
 
   return response.json();
@@ -666,9 +709,428 @@ export async function fetchPolygonTick(
   return response.json();
 }
 
-export function getPolygonStreamUrl(symbols: string[] = ["NVDA", "AAPL", "TSLA", "SPY", "MSFT", "AMZN", "INFY"]): string {
+export function getPolygonStreamUrl(symbols: string[] = ["NVDA", "AAPL", "TSLA", "SPY", "MSFT", "AMZN", "INFY", "XAUUSD"]): string {
   return `${API_URL}/api/v1/market/polygon/stream?symbols=${encodeURIComponent(symbols.join(","))}`;
 }
 
+// ─── PHASE 1: BILLING, GEMS & SUBSCRIPTION TYPES & CLIENT ───
 
+export type SubscriptionPlan = {
+  id: string;
+  slug: string;
+  name: string;
+  positioning: string;
+  description: string;
+  price: number;
+  price_yearly?: number;
+  yearly_discount_percent?: number;
+  currency: string;
+  billing_interval: string;
+  included_courses: string[];
+  included_tools: string[];
+  simulator_access: string;
+  community_tier: string;
+  ai_coach_access: boolean;
+  monthly_gems: number;
+  is_popular?: boolean;
+};
+
+export type MembershipDetails = {
+  plan: string;
+  planName: string;
+  status: string;
+  billingInterval?: string;
+  renewalDate: string | null;
+  autoRenew: boolean;
+  gems: {
+    balance: number;
+    monthlyAllocation: number;
+  };
+  unlockedCourses: {
+    unlocked: number;
+    total: number;
+    courses: string[];
+  };
+  unlockedTools: {
+    unlocked: number;
+    total: number;
+    tools: string[];
+  };
+  simulatorAccess: boolean;
+  communityAccess: string;
+  paymentHistory: {
+    id: string;
+    paymentId: string;
+    amount: number;
+    currency: string;
+    status: string;
+    date: string;
+  }[];
+};
+
+export type GemTransaction = {
+  id: string;
+  type: string;
+  amount: number;
+  source: string;
+  description: string;
+  balanceAfter: number;
+  createdAt: string;
+};
+
+export type GemWalletData = {
+  balance: number;
+  lifetimeCredited: number;
+  lifetimeDebited: number;
+  currentPeriodAllocated: number;
+  history: GemTransaction[];
+};
+
+export type CheckoutSessionResponse = {
+  sessionId: string;
+  subscriptionId: string;
+  keyId: string;
+  amount: number;
+  originalAmount: number;
+  discountAmount: number;
+  finalPrice: number;
+  currency: string;
+  planName: string;
+  planSlug: string;
+  interval: string;
+  couponCode?: string | null;
+  isUpgrade?: boolean;
+  isDowngrade?: boolean;
+  isMock: boolean;
+};
+
+export type CouponValidationResponse = {
+  valid: boolean;
+  code?: string;
+  discountType?: string;
+  discountValue?: number;
+  discountAmount?: number;
+  basePrice?: number;
+  finalPrice?: number;
+  message: string;
+};
+
+export type GemPackage = {
+  package_id: string;
+  name: string;
+  gems: number;
+  price: number;
+  currency: string;
+  is_popular?: boolean;
+};
+
+export async function fetchPlans(): Promise<SubscriptionPlan[]> {
+  const response = await fetch(`${API_URL}/api/v1/billing/plans`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function fetchMembership(): Promise<MembershipDetails> {
+  const response = await fetch(`${API_URL}/api/v1/billing/membership`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function createSubscriptionCheckout(
+  plan: string,
+  interval: string = "monthly",
+  couponCode?: string
+): Promise<CheckoutSessionResponse> {
+  const response = await fetch(`${API_URL}/api/v1/billing/checkout/subscription`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      plan,
+      interval,
+      coupon_code: couponCode || null,
+    }),
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function verifySubscriptionPayment(data: {
+  plan: string;
+  interval?: string;
+  razorpay_payment_id: string;
+  razorpay_subscription_id: string;
+  razorpay_signature: string;
+  coupon_code?: string;
+  session_id?: string;
+}): Promise<any> {
+  const response = await fetch(`${API_URL}/api/v1/billing/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function cancelSubscription(): Promise<{
+  success: boolean;
+  message: string;
+  currentPeriodEnd?: string;
+  autoRenew: boolean;
+}> {
+  const response = await fetch(`${API_URL}/api/v1/billing/subscription/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function resumeSubscription(): Promise<{
+  success: boolean;
+  message: string;
+  autoRenew: boolean;
+  status: string;
+}> {
+  const response = await fetch(`${API_URL}/api/v1/billing/subscription/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function validateCoupon(
+  code: string,
+  plan: string,
+  interval: string = "monthly"
+): Promise<CouponValidationResponse> {
+  const response = await fetch(`${API_URL}/api/v1/billing/coupons/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ code, plan, interval }),
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function fetchGemPackages(): Promise<GemPackage[]> {
+  const response = await fetch(`${API_URL}/api/v1/gems/packages`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function createGemCheckout(packageId: string): Promise<any> {
+  const response = await fetch(`${API_URL}/api/v1/gems/checkout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ package_id: packageId }),
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function verifyGemPayment(packageId: string, paymentId: string): Promise<any> {
+  const response = await fetch(`${API_URL}/api/v1/gems/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ package_id: packageId, payment_id: paymentId }),
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function createCourseCheckout(courseId: string): Promise<any> {
+  const response = await fetch(`${API_URL}/api/v1/billing/courses/checkout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ course_id: courseId }),
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function verifyCoursePayment(courseId: string, paymentId?: string): Promise<any> {
+  const response = await fetch(`${API_URL}/api/v1/billing/courses/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ course_id: courseId, payment_id: paymentId }),
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function fetchAdminAnalytics(): Promise<any> {
+  const response = await fetch(`${API_URL}/api/v1/billing/admin/analytics`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function fetchGemWallet(): Promise<GemWalletData> {
+  const response = await fetch(`${API_URL}/api/v1/gems/wallet`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+export async function askAiCoach(
+  question: string,
+  context?: string
+): Promise<{ answer: string; gemsConsumed: number; remainingGems: number }> {
+  const response = await fetch(`${API_URL}/api/v1/coach/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ question, context }),
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
+
+
+// ─── MARKETS PAGE TYPES & CLIENT ─────────────────────────────────────────────
+
+export type MarketTickerItem = {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  isPositive: boolean;
+};
+
+export type HeatmapTile = {
+  symbol: string;
+  name: string;
+  changePercent: number;
+  isPositive: boolean;
+  sector: string;
+  marketCap: string;
+  size: number;
+  price?: number;
+};
+
+export type AIInsight = {
+  symbol: string;
+  tag: string;
+  tagColor: string;
+  description: string;
+  iconColor: string;
+};
+
+export type TopMover = {
+  symbol: string;
+  name: string;
+  changePercent: number;
+  isPositive: boolean;
+  sparkline: number[];
+};
+
+export type SectorPerf = {
+  sector: string;
+  icon: string;
+  changePercent: number;
+  isPositive: boolean;
+  barPercent: number;
+};
+
+export type MarketNewsItem = {
+  id: string;
+  headline: string;
+  summary: string;
+  source: string;
+  timeAgo: string;
+  category: string;
+  thumbnailUrl?: string;
+};
+
+export type EconomicEvent = {
+  id: string;
+  day: number;
+  month: string;
+  title: string;
+  time: string;
+  location: string;
+  importance: string;
+  category: string;
+  icon: string;
+};
+
+export type MarketsPageData = {
+  indexTicker: MarketTickerItem[];
+  heatmap: HeatmapTile[];
+  aiInsights: AIInsight[];
+  topGainers: TopMover[];
+  topLosers: TopMover[];
+  mostActive: TopMover[];
+  sectorPerformance: SectorPerf[];
+  news: MarketNewsItem[];
+  calendar: EconomicEvent[];
+  marketStatus: string;
+  marketStatusTime: string;
+};
+
+export async function fetchMarketsPage(signal?: AbortSignal): Promise<MarketsPageData> {
+  const response = await fetch(`${API_URL}/api/v1/market/page`, {
+    cache: "no-store",
+    signal,
+  });
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+  return response.json();
+}
 

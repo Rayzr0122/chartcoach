@@ -83,7 +83,24 @@ def get_lesson_detail(
 ):
     """
     Returns full lesson content, video streaming playback metadata, and user's saved position.
+    Protected server-side by capability entitlement.
     """
+    from fastapi import HTTPException
+    from app.services.entitlement_service import EntitlementService
+
+    entitlements = EntitlementService(db)
+    if not entitlements.is_entitled(current_user, f"course:{course_id}"):
+        req = entitlements.get_required_plan(f"course:{course_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "COURSE_LOCKED",
+                "message": f"This lesson is part of a locked course. Available with {req['requiredPlanName']}.",
+                "requiredPlan": req["requiredPlan"],
+                "requiredPlanName": req["requiredPlanName"],
+            },
+        )
+
     service = LearningService(db)
     return service.get_lesson_detail(current_user, course_id, lesson_id)
 

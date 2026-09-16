@@ -5,6 +5,20 @@ const nextConfig: NextConfig = {
   // It only ever appears during `next dev` anyway (never in production),
   // but this turns it off for local development too.
   devIndicators: false,
+  async redirects() {
+    return [
+      {
+        source: "/markets",
+        destination: "/market",
+        permanent: true,
+      },
+      {
+        source: "/makets",
+        destination: "/market",
+        permanent: true,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

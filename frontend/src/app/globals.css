@@ -1,8 +1,11 @@
 @import "tailwindcss";
 @plugin "daisyui";
+@config "../../tailwind.config.js";
 
 /* ─── ChartCoach Design Tokens (White, Blue, Green) ─── */
 :root {
+  --border: #e2e8f0;
+  --muted-foreground: #64748b;
   --cc-brand-blue: #0d6efd;
   --cc-brand-blue-hover: #0b5ed7;
   --cc-brand-green: #10b981;
@@ -12,8 +15,68 @@
 }
 
 @theme inline {
+  --color-border: var(--border);
+  --color-muted-foreground: var(--muted-foreground);
   --color-brand-blue: var(--cc-brand-blue);
   --font-sans: var(--font-inter);
+}
+
+@keyframes accordion-down {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+  to {
+    height: 0;
+  }
+}
+
+.animate-accordion-down {
+  animation: accordion-down 0.2s ease-out;
+}
+
+.animate-accordion-up {
+  animation: accordion-up 0.2s ease-out;
+}
+
+@keyframes celebration-pop {
+  0% {
+    transform: scale(0.92);
+  }
+  50% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes annual-pulse-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.animate-celebration {
+  animation: celebration-pop 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.animate-annual-glow {
+  animation: annual-pulse-glow 0.8s ease-out;
 }
 
 body {
@@ -396,6 +459,91 @@ body {
   animation: overlay-in 150ms ease forwards;
 }
 
+/* ─── Premium Motion Graphics Modal System (Entrance & Exit) ─── */
+
+/* 1. Backdrop: Smooth frosted-glass bloom in & out */
+@keyframes backdrop-motion-in {
+  0% {
+    opacity: 0;
+    backdrop-filter: blur(0px);
+    -webkit-backdrop-filter: blur(0px);
+  }
+  100% {
+    opacity: 1;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+}
+
+@keyframes backdrop-motion-out {
+  0% {
+    opacity: 1;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+  100% {
+    opacity: 0;
+    backdrop-filter: blur(0px);
+    -webkit-backdrop-filter: blur(0px);
+  }
+}
+
+.animate-backdrop-in,
+.animate-backdrop-smooth {
+  animation: backdrop-motion-in 320ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: opacity, backdrop-filter;
+}
+
+.animate-backdrop-out {
+  animation: backdrop-motion-out 220ms cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  will-change: opacity, backdrop-filter;
+  pointer-events: none;
+}
+
+/* 2. Modal Card: Fluid spring motion graphics entrance & smooth exit */
+@keyframes modal-motion-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(54px) scale(0.93);
+    filter: blur(8px);
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0px);
+  }
+}
+
+@keyframes modal-motion-exit {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(32px) scale(0.96);
+    filter: blur(4px);
+  }
+}
+
+.animate-modal-enter,
+.animate-modal-slide-up {
+  animation: modal-motion-enter 360ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: center bottom;
+  will-change: transform, opacity, filter;
+}
+
+.animate-modal-exit {
+  animation: modal-motion-exit 220ms cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  transform-origin: center bottom;
+  will-change: transform, opacity, filter;
+  pointer-events: none;
+}
+
 /* ─── Modern Custom Scrollbar ─── */
 .custom-scrollbar::-webkit-scrollbar {
   width: 5px;
@@ -420,4 +568,36 @@ body {
   transform: translateY(-2px);
   box-shadow: 0 12px 24px -10px rgba(15, 23, 42, 0.08);
 }
+
+/* ─── Infinite Seamless Ticker Marquee ─── */
+@keyframes ticker-marquee-scroll {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.animate-ticker-marquee {
+  display: flex;
+  width: max-content;
+  animation: ticker-marquee-scroll 32s linear infinite;
+  will-change: transform;
+}
+
+.animate-ticker-marquee:hover,
+.ticker-marquee-wrapper:hover .animate-ticker-marquee {
+  animation-play-state: paused;
+}
+
+/* ─── Razorpay Checkout Frame & Modal Fixes ─── */
+iframe.razorpay-checkout-frame,
+iframe[name^="razorpay"],
+.razorpay-container,
+.razorpay-backdrop {
+  color-scheme: light !important;
+  z-index: 2147483647 !important;
+}
+
 

@@ -22,11 +22,20 @@ class Settings(BaseSettings):
     # Polygon.io API key for live financial market data & TradingView charts
     polygon_api_key: str = "u2kEX_q5yC8uBLevrFS13IjJjVvpe3eL"
 
-    # Whether the login cookie requires HTTPS. Keep False for local dev over
-    # plain http://, but this MUST be True in any real deployment.
+    # Whether the login cookie requires HTTPS
     cookie_secure: bool = False
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # Razorpay Recurring Subscriptions & Webhooks (Phase 1)
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+    razorpay_mock_mode: bool = False
+
+    @property
+    def is_razorpay_mock(self) -> bool:
+        return self.razorpay_mock_mode or not self.razorpay_key_id or self.razorpay_key_id.startswith("mock_")
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
 # One shared settings object used everywhere in the app

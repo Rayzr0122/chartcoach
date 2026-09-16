@@ -101,6 +101,7 @@ POPULAR_ASSETS: Dict[str, Dict[str, str]] = {
     "INFY": {"name": "Infosys Limited ADR", "category": "IT Services", "exchange": "NYSE"},
     "HDB": {"name": "HDFC Bank Ltd ADR", "category": "Banking & Finance", "exchange": "NYSE"},
     "IBN": {"name": "ICICI Bank Ltd ADR", "category": "Banking & Finance", "exchange": "NYSE"},
+    "XAUUSD": {"name": "Gold Spot / US Dollar", "category": "Commodities / Forex", "exchange": "FOREX"},
     # Fallback mappings for Indian indices for backward compatibility
     "NIFTY 50": {"name": "NSE Nifty 50 Index", "category": "Indian Benchmark", "exchange": "NSE"},
     "NIFTY50": {"name": "NSE Nifty 50 Index", "category": "Indian Benchmark", "exchange": "NSE"},
@@ -111,7 +112,7 @@ POPULAR_ASSETS: Dict[str, Dict[str, str]] = {
 }
 
 DEFAULT_WATCHLIST = ["NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "INFY"]
-DEFAULT_TICKER = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "INFY"]
+DEFAULT_TICKER = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "INFY", "XAUUSD"]
 ALLOWED_TIMEFRAMES = {"1D", "1W", "1M", "1Y", "ALL"}
 SYMBOL_REGEX = re.compile(r"^[A-Z0-9.\-_]{1,15}$")
 
@@ -326,9 +327,9 @@ class PolygonService:
         if cached:
             return cached
 
-        # 2. Native Indian index fallback
+        # 2. Native Indian index & Commodity/Forex fallback
         asset_meta = POPULAR_ASSETS.get(clean_sym, {"name": clean_sym, "category": "Equity", "exchange": "US"})
-        if clean_sym in ("NIFTY50", "NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY"):
+        if clean_sym in ("NIFTY50", "NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY", "XAUUSD"):
             quote = self._generate_fallback_quote(clean_sym, asset_meta["name"])
             self._set_cached(cache_key, quote, ttl_seconds=60.0)
             return quote
@@ -446,8 +447,8 @@ class PolygonService:
 
         asset_meta = POPULAR_ASSETS.get(clean_sym, {"name": clean_sym, "category": "Equity", "exchange": "US"})
 
-        # Native Indian index fallback
-        if clean_sym in ("NIFTY50", "NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY"):
+        # Native Indian index & Commodity/Forex fallback
+        if clean_sym in ("NIFTY50", "NIFTY", "SENSEX", "BANKNIFTY", "FINNIFTY", "XAUUSD"):
             hist = self._generate_fallback_history(clean_sym, asset_meta["name"], tf)
             self._set_cached(cache_key, hist, ttl_seconds=90.0)
             return hist
@@ -654,6 +655,7 @@ class PolygonService:
             "BANKNIFTY": 52340.10,
             "BANK NIFTY": 52340.10,
             "FINNIFTY": 23890.15,
+            "XAUUSD": 2655.80,
         }
         price = baseline_prices.get(symbol, 150.0)
         # Calibrated deterministic jitter per minute to reflect living market

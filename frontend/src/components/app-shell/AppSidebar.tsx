@@ -169,37 +169,79 @@ export default function AppSidebar({
         {/* Bottom Section: Upgrade to Pro Card */}
         {!collapsed ? (
           <div className="pt-2 space-y-3">
-            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-b from-[#09152B] via-[#0E2042] to-[#0A1628] p-4 text-white border border-slate-800 shadow-lg">
-              <div className="flex items-center gap-2">
-                <span className="text-lg leading-none" role="img" aria-label="crown">👑</span>
+            {user.subscription_plan === "elite" ? (
+              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-b from-[#061e16] via-[#09291e] to-[#041710] p-4 text-white border border-emerald-500/30 shadow-lg shadow-emerald-950/20">
+                <div className="flex items-center justify-between">
+                  <span className="text-lg leading-none" role="img" aria-label="crown">👑</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-300 border border-emerald-400/40">
+                    Elite Active
+                  </span>
+                </div>
+                <h4 className="mt-2 text-sm font-extrabold tracking-tight text-white">Full Access Active</h4>
+                <p className="mt-1 text-[11px] text-slate-300 leading-relaxed">
+                  All 5 courses, all tools, and 4,000 monthly gems.
+                </p>
+                <Link
+                  href="/settings"
+                  className="mt-3.5 flex items-center justify-center gap-1.5 w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all cursor-pointer"
+                >
+                  <span>Manage Membership</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
               </div>
-              <h4 className="mt-2 text-sm font-extrabold tracking-tight text-white">Upgrade to Pro</h4>
-              <ul className="mt-2 space-y-1.5 text-[11px] text-slate-300">
-                <li className="flex items-center gap-1.5">
-                  <span className="text-blue-400 font-bold text-xs">✦</span>
-                  <span>Unlock advanced tools</span>
-                </li>
-                <li className="flex items-center gap-1.5">
-                  <span className="text-blue-400 font-bold text-xs">✦</span>
-                  <span>Live trading sessions</span>
-                </li>
-                <li className="flex items-center gap-1.5">
-                  <span className="text-blue-400 font-bold text-xs">✦</span>
-                  <span>Premium courses</span>
-                </li>
-                <li className="flex items-center gap-1.5">
-                  <span className="text-blue-400 font-bold text-xs">✦</span>
-                  <span>Personalised insights</span>
-                </li>
-              </ul>
-              <Link
-                href="/pricing"
-                className="mt-3.5 flex items-center justify-center gap-1.5 w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-600/30 transition-all cursor-pointer"
-              >
-                <span>Upgrade Now</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </Link>
-            </div>
+            ) : user.subscription_plan === "pro" ? (
+              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-b from-[#09152B] via-[#0E2042] to-[#0A1628] p-4 text-white border border-blue-500/30 shadow-lg">
+                <div className="flex items-center justify-between">
+                  <span className="text-lg leading-none" role="img" aria-label="crown">👑</span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-400/40">
+                    Pro Active
+                  </span>
+                </div>
+                <h4 className="mt-2 text-sm font-extrabold tracking-tight text-white">Pro Membership</h4>
+                <p className="mt-1 text-[11px] text-slate-300 leading-relaxed">
+                  1,500 Gems, live simulator & advanced tools active.
+                </p>
+                <Link
+                  href="/settings"
+                  className="mt-3.5 flex items-center justify-center gap-1.5 w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all cursor-pointer"
+                >
+                  <span>Manage Membership</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+              </div>
+            ) : (
+              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-b from-[#09152B] via-[#0E2042] to-[#0A1628] p-4 text-white border border-slate-800 shadow-lg">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg leading-none" role="img" aria-label="crown">👑</span>
+                </div>
+                <h4 className="mt-2 text-sm font-extrabold tracking-tight text-white">Upgrade to Pro</h4>
+                <ul className="mt-2 space-y-1.5 text-[11px] text-slate-300">
+                  <li className="flex items-center gap-1.5">
+                    <span className="text-blue-400 font-bold text-xs">✦</span>
+                    <span>Unlock advanced tools</span>
+                  </li>
+                  <li className="flex items-center gap-1.5">
+                    <span className="text-blue-400 font-bold text-xs">✦</span>
+                    <span>Live trading sessions</span>
+                  </li>
+                  <li className="flex items-center gap-1.5">
+                    <span className="text-blue-400 font-bold text-xs">✦</span>
+                    <span>Premium courses</span>
+                  </li>
+                  <li className="flex items-center gap-1.5">
+                    <span className="text-blue-400 font-bold text-xs">✦</span>
+                    <span>1,500 monthly Gems</span>
+                  </li>
+                </ul>
+                <Link
+                  href="/pricing"
+                  className="mt-3.5 flex items-center justify-center gap-1.5 w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-600/30 transition-all cursor-pointer"
+                >
+                  <span>Upgrade Now</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+              </div>
+            )}
 
             {/* Subtle Biometric Status */}
             <div className="flex items-center justify-between px-1 text-[11px] text-slate-400">

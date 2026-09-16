@@ -32,3 +32,6 @@ websockets
 
 # HTTP Client for financial market APIs (Polygon.io)
 httpx>=0.28.0
+
+# Payment Gateway (Razorpay Recurring Subscriptions)
+razorpay>=2.0.1

@@ -592,26 +592,22 @@ function MarketOverviewChartInner({
           </div>
         )}
 
-        {/* ChartCoach Subtle Brand Watermark (Replaces TradingView Logo) */}
+        {/* ChartCoach Subtle Brand Watermark (Official Trimmed Logo) */}
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center select-none z-0">
-          <div className="flex flex-col items-center opacity-[0.04] transform -rotate-6">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-slate-900 flex items-center justify-center text-white font-black text-lg shadow-sm">
-                CC
-              </div>
-              <span className="text-3xl sm:text-4xl font-black tracking-widest text-slate-900 uppercase font-sans">
-                CHARTCOACH
-              </span>
-            </div>
-            <span className="text-[9px] font-bold tracking-[0.25em] text-slate-900 uppercase mt-1">
-              PRO INTELLIGENCE TERMINAL
-            </span>
-          </div>
+          <img
+            src="/assets/chartcoach logo final trimmed.png"
+            alt="ChartCoach Watermark"
+            className="w-72 sm:w-96 max-w-[70%] opacity-[0.08] pointer-events-none select-none"
+          />
         </div>
 
         {/* ChartCoach Terminal Brand Stamp in Bottom-Left Corner (Replaces TradingView Logo) */}
-        <div className="absolute bottom-2.5 left-3 pointer-events-none flex items-center gap-1.5 z-20 opacity-60 select-none bg-white/80 backdrop-blur-xs px-2 py-0.5 rounded border border-slate-200/50 shadow-3xs">
-          <span className="w-1.5 h-1.5 rounded-full bg-blue-600 inline-block" />
+        <div className="absolute bottom-2.5 left-3 pointer-events-none flex items-center gap-1.5 z-20 select-none bg-white/85 backdrop-blur-xs px-2 py-0.5 rounded-md border border-slate-200/60 shadow-3xs">
+          <img
+            src="/assets/chartcoach_icon.png"
+            alt="ChartCoach"
+            className="h-3.5 w-auto object-contain"
+          />
           <span className="text-[9.5px] font-extrabold tracking-wider text-slate-700 uppercase font-mono">
             ChartCoach Terminal
           </span>
