@@ -14,6 +14,7 @@ from pymongo.database import Database
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.models.user import User
+from app.services.polygon_service import polygon_service
 
 router = APIRouter(prefix="/api/v1/simulator", tags=["simulator"])
 admin_router = APIRouter(prefix="/api/v1/admin/simulator", tags=["simulator-admin"])
@@ -102,6 +103,13 @@ def _price(instrument_id: str, bar: int) -> Decimal:
     return Decimal(seed) + Decimal(bar) * Decimal("0.35")
 
 
+def _polygon_symbol(instrument_id: str) -> str | None:
+    venue, _, symbol = instrument_id.partition(":")
+    if venue == "NASDAQ":
+        return symbol
+    return None
+
+
 def _account(db: Database, learner_id: str) -> dict:
     account = db.simulator_accounts.find_one({"learner_id": learner_id, "mode": "delayed", "status": "active"})
     if account:
@@ -161,7 +169,7 @@ def create_session(payload: SessionCreate, user: User = Depends(get_current_user
         account = _account(db, user.id)
     else:
         account = {"id": f"acct_{uuid4().hex}", "reporting_currency": "INR", "cash": _money(STARTING_EQUITY), "equity": _money(STARTING_EQUITY), "revision": 1}
-    session = {"id": f"sim_{uuid4().hex}", "learner_id": user.id, "mode": payload.mode, "instrument_id": payload.instrument_id, "dataset_id": "synthetic-global-v1", "clock": 100, "state": "paused", "speed": 1, "revision": 1, "account": account, "assisted": False, "drill_id": payload.drill_id, "created_at": _now()}
+    session = {"id": f"sim_{uuid4().hex}", "learner_id": user.id, "mode": payload.mode, "instrument_id": payload.instrument_id, "dataset_id": "synthetic-global-v1", "data_source": "polygon-delayed" if payload.mode == "delayed" and _polygon_symbol(payload.instrument_id) else "synthetic-test", "clock": 100, "state": "paused", "speed": 1, "revision": 1, "account": account, "assisted": False, "drill_id": payload.drill_id, "created_at": _now()}
     db.simulator_sessions.insert_one(session)
     return _snapshot(db, session)
 
@@ -197,9 +205,16 @@ def ledger(session_id: str, user: User = Depends(get_current_user), db: Database
 
 
 @router.get("/sessions/{session_id}/candles")
-def candles(session_id: str, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
+async def candles(session_id: str, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
     _require_access(user)
     session = _session(db, session_id, user.id)
+    if session.get("data_source") == "polygon-delayed":
+        symbol = _polygon_symbol(session["instrument_id"])
+        history = await polygon_service.get_history(symbol, "1D") if symbol else None
+        if history and history.source == "polygon":
+            bars = history.bars[: min(session["clock"], len(history.bars))]
+            return [{"time": bar.time, "open": _money(Decimal(str(bar.open))), "high": _money(Decimal(str(bar.high))), "low": _money(Decimal(str(bar.low))), "close": _money(Decimal(str(bar.close))), "volume": str(int(bar.volume or 0))} for bar in bars]
+        raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "Polygon delayed data is unavailable for this instrument right now."})
     visible = min(session["clock"], 400)
     result = []
     for index in range(max(0, visible - 100), visible):
@@ -228,7 +243,7 @@ def control(session_id: str, payload: Control, user: User = Depends(get_current_
 
 
 @router.post("/sessions/{session_id}/orders")
-def create_order(session_id: str, payload: OrderCreate, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), db: Database = Depends(get_db)):
+async def create_order(session_id: str, payload: OrderCreate, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), db: Database = Depends(get_db)):
     _require_access(user)
     session = _session(db, session_id, user.id)
     fingerprint = _payload_fingerprint(payload)
@@ -238,6 +253,12 @@ def create_order(session_id: str, payload: OrderCreate, idempotency_key: str = H
             raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT", "message": "This idempotency key was already used for a different order."})
         return existing["response"]
     price = payload.limit_price or _price(session["instrument_id"], session["clock"] + 1)
+    if payload.order_type == "market" and session.get("data_source") == "polygon-delayed":
+        symbol = _polygon_symbol(session["instrument_id"])
+        quote = await polygon_service.get_quote(symbol) if symbol else None
+        if not quote or quote.source != "polygon":
+            raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "Polygon delayed quote is unavailable; the order was not submitted."})
+        price = Decimal(str(quote.price))
     notional = price * payload.quantity
     cash = Decimal(session["account"]["cash"])
     if payload.side == "buy" and notional > cash:
