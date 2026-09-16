@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     # Database connection string
     database_url: str
     database_name: str = "chartcoach"
+    simulator_redis_url: str = "redis://localhost:6380/0"
 
     # Secret key used to sign login tokens (JWT)
     jwt_secret_key: str

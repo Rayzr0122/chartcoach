@@ -34,5 +34,8 @@ websockets
 # HTTP Client for financial market APIs (Polygon.io)
 httpx>=0.28.0
 
+# Simulator worker coordination and event queues
+redis>=5.2.0
+
 # Payment Gateway (Razorpay Recurring Subscriptions)
 razorpay>=2.0.1

@@ -30,6 +30,22 @@ services:
           cpus: "2"
           memory: 2G
 
+  simulator-redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - chartcoach-simulator-redis:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
 volumes:
   chartcoach-mongo-data:
     name: chartcoach-local-mongo-data
+  chartcoach-simulator-redis:
+    name: chartcoach-simulator-redis
