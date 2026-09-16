@@ -1,6 +1,7 @@
 export type SimulatorSession = {
   id: string; mode: "replay" | "delayed" | "drill"; instrument_id: string; clock: number;
   state: string; speed: number; assisted: boolean; revision: number;
+  data_source?: string;
   account: { id: string; cash: string; equity: string; reporting_currency: string };
   orders: SimulatorOrder[]; fills: SimulatorFill[];
 };
