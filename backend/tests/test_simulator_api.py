@@ -1,10 +1,36 @@
 import mongomock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock, patch
 
 from app.api import simulator
 from app.core.security import create_access_token
 from app.database import get_db
+from app.services.polygon_service import PolygonHistoryResponse, TradingViewBarDTO
+
+
+def test_instrument_catalog_identifies_polygon_delayed_coverage():
+    catalog = simulator._instruments()
+
+    aapl = next(item for item in catalog if item["id"] == "NASDAQ:AAPL")
+    reliance = next(item for item in catalog if item["id"] == "NSE:RELIANCE")
+
+    assert aapl["replay_source"] == "synthetic-test"
+    assert aapl["delayed_source"] == "polygon-delayed"
+    assert aapl["polygon_supported"] is True
+    assert reliance["delayed_source"] == "synthetic-test"
+    assert reliance["polygon_supported"] is False
+
+
+def test_instrument_catalog_can_load_before_entitlement_is_checked():
+    app = FastAPI()
+    app.include_router(simulator.router)
+    client = TestClient(app)
+
+    response = client.get("/api/v1/simulator/instruments")
+
+    assert response.status_code == 200
+    assert any(item["id"] == "NASDAQ:AAPL" for item in response.json())
 
 
 def test_bootstrap_creates_an_inr_practice_account_for_an_entitled_learner():
@@ -49,6 +75,61 @@ def test_market_fill_is_visible_in_orders_fills_positions_and_ledger():
     position = client.get(f"/api/v1/simulator/sessions/{session['id']}/positions", headers=headers).json()[0]
     assert position["quantity"] == "2"
     assert client.get(f"/api/v1/simulator/sessions/{session['id']}/ledger", headers=headers).json()[0]["order_id"] == created.json()["id"]
+
+
+def test_delayed_nasdaq_session_exposes_polygon_candles():
+    db = mongomock.MongoClient().chartcoach
+    db.users.insert_one({"_id": "learner-1", "email": "learner@example.test", "full_name": "Learner", "hashed_password": "x", "subscription_plan": "trader", "is_active": True})
+    app = FastAPI()
+    app.include_router(simulator.router)
+    app.dependency_overrides[get_db] = lambda: db
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {create_access_token('learner@example.test')}"}
+    polygon_history = PolygonHistoryResponse(
+        symbol="AAPL",
+        name="Apple Inc.",
+        timeframe="1D",
+        bars=[
+            TradingViewBarDTO(time=1735809300, open=100, high=101, low=99, close=100.5, volume=1000, value=100.5),
+            TradingViewBarDTO(time=1735809360, open=100.5, high=102, low=100, close=101.5, volume=1200, value=101.5),
+        ],
+        current_price=101.5,
+        change=1.5,
+        change_percent=1.5,
+        is_positive=True,
+        high_period=102,
+        low_period=99,
+    )
+
+    with patch.object(simulator.polygon_service, "get_history", new=AsyncMock(return_value=polygon_history)):
+        session = client.post("/api/v1/simulator/sessions", json={"mode": "delayed", "instrument_id": "NASDAQ:AAPL"}, headers=headers).json()
+        response = client.get(f"/api/v1/simulator/sessions/{session['id']}/candles", headers=headers)
+
+    assert session["data_source"] == "polygon-delayed"
+    assert response.status_code == 200
+    assert response.json()[-1]["close"] == "101.50"
+
+
+def test_saved_session_with_internal_account_identifier_can_be_loaded():
+    from bson import ObjectId
+
+    db = mongomock.MongoClient().chartcoach
+    db.users.insert_one({"_id": "learner-1", "email": "learner@example.test", "full_name": "Learner", "hashed_password": "x", "subscription_plan": "trader", "is_active": True})
+    app = FastAPI()
+    app.include_router(simulator.router)
+    app.dependency_overrides[get_db] = lambda: db
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {create_access_token('learner@example.test')}"}
+    session = client.post("/api/v1/simulator/sessions", json={"mode": "replay"}, headers=headers).json()
+    internal_id = ObjectId()
+    db.simulator_sessions.update_one({"id": session["id"]}, {"$set": {"account._id": internal_id}})
+
+    response = client.get(f"/api/v1/simulator/sessions/{session['id']}", headers=headers)
+
+    assert response.status_code == 200
+    assert "_id" not in response.json()["account"]
+    assert response.json()["account"]["cash"] == session["account"]["cash"]
+    assert db.simulator_sessions.find_one({"id": session["id"]})["account"]["_id"] == internal_id
 
 
 def test_idempotency_key_cannot_be_reused_for_a_different_order_payload():

@@ -98,7 +98,24 @@ def _instruments() -> list[dict]:
     items = []
     for venue, asset_class, currency, symbols in groups:
         for symbol in symbols:
-            items.append({"id": f"{venue}:{symbol}", "symbol": symbol, "venue": venue, "asset_class": asset_class, "quote_currency": currency, "tick_size": "0.01", "quantity_increment": "1", "contract_multiplier": "1" if asset_class != "future" else "10", "source": "synthetic-test"})
+            items.append({
+                "id": f"{venue}:{symbol}",
+                "symbol": symbol,
+                "venue": venue,
+                "asset_class": asset_class,
+                "quote_currency": currency,
+                "tick_size": "0.01",
+                "quantity_increment": "1",
+                "contract_multiplier": "1" if asset_class != "future" else "10",
+                # Keep `source` as the replay default for older clients. The
+                # mode-specific fields prevent the setup page from claiming
+                # that a Polygon-supported US symbol is synthetic in delayed
+                # paper mode.
+                "source": "synthetic-test",
+                "replay_source": "synthetic-test",
+                "delayed_source": "polygon-delayed" if venue == "NASDAQ" else "synthetic-test",
+                "polygon_supported": venue == "NASDAQ",
+            })
     return items
 
 
@@ -115,11 +132,15 @@ def _polygon_symbol(instrument_id: str) -> str | None:
 
 
 def _account(db: Database, learner_id: str) -> dict:
-    account = db.simulator_accounts.find_one({"learner_id": learner_id, "mode": "delayed", "status": "active"})
+    account = db.simulator_accounts.find_one({"learner_id": learner_id, "mode": "delayed", "status": "active"}, {"_id": 0})
     if account:
         return account
     account = {"id": f"acct_{uuid4().hex}", "learner_id": learner_id, "mode": "delayed", "status": "active", "reporting_currency": "INR", "cash": _money(STARTING_EQUITY), "equity": _money(STARTING_EQUITY), "revision": 1, "created_at": _now()}
     db.simulator_accounts.insert_one(account)
+    # PyMongo/mongomock may add `_id` to the in-memory document during
+    # insertion. Mongo's internal identifier is not part of the public
+    # simulator contract and ObjectId cannot be JSON encoded by FastAPI.
+    account.pop("_id", None)
     return account
 
 
@@ -131,6 +152,9 @@ def _session(db: Database, session_id: str, learner_id: str) -> dict:
 
 
 def _snapshot(db: Database, session: dict) -> dict:
+    # Older sessions may embed Mongo's internal identifier in their account.
+    # Sanitize the response without rewriting historical persisted records.
+    session = {**session, "account": {key: value for key, value in session["account"].items() if key != "_id"}}
     orders = list(db.simulator_orders.find({"session_id": session["id"]}, {"_id": 0}).sort("created_at", -1))
     fills = list(db.simulator_fills.find({"session_id": session["id"]}, {"_id": 0}).sort("created_at", -1))
     return {"id": session["id"], "mode": session["mode"], "instrument_id": session["instrument_id"], "data_source": session.get("data_source", "synthetic-test"), "clock": session["clock"], "state": session["state"], "speed": session["speed"], "assisted": session.get("assisted", False), "revision": session["revision"], "account": session["account"], "orders": orders, "fills": fills}
@@ -163,8 +187,10 @@ def bootstrap(user: User = Depends(get_current_user), db: Database = Depends(get
 
 
 @router.get("/instruments")
-def instruments(user: User = Depends(get_current_user)):
-    _require_access(user)
+def instruments():
+    # The catalog is non-user data. Loading it before bootstrap lets the
+    # client render an actionable sign-in/entitlement state instead of a
+    # blank selector when account access is the only failed request.
     return _instruments()
 
 

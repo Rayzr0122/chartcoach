@@ -10,7 +10,7 @@ function Stop-ProcessTree([int]$RootProcessId) {
     Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue
 }
 
-foreach ($name in @("frontend", "backend")) {
+foreach ($name in @("frontend", "backend", "worker")) {
     $pidFile = Join-Path $localState "$name.pid"
     if (-not (Test-Path -LiteralPath $pidFile)) {
         continue
