@@ -10,9 +10,16 @@ export type SimulatorFill = { id: string; order_id: string; price: string; quant
 export type Instrument = { id: string; symbol: string; venue: string; asset_class: string; quote_currency: string; source: string };
 
 const baseUrl = () => process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || (typeof window === "undefined" ? "http://localhost:8000" : `${window.location.protocol}//${window.location.hostname}:8000`);
+export class SimulatorApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) { super(message); this.name = "SimulatorApiError"; }
+}
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl()}/api/v1/simulator${path}`, { credentials: "include", ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail?.message || "Simulator request failed.");
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const message = body?.error?.message || body?.detail?.message || body?.detail || (response.status === 401 ? "Your session has expired. Sign in again to use practice trading." : response.status === 403 ? "Practice trading requires the Trader plan or higher." : `Simulator request failed (${response.status}).`);
+    throw new SimulatorApiError(typeof message === "string" ? message : "Simulator request failed.", response.status, body?.error?.code || body?.detail?.code);
+  }
   return response.json();
 }
 export const simulatorApi = {

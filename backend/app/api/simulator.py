@@ -133,7 +133,7 @@ def _session(db: Database, session_id: str, learner_id: str) -> dict:
 def _snapshot(db: Database, session: dict) -> dict:
     orders = list(db.simulator_orders.find({"session_id": session["id"]}, {"_id": 0}).sort("created_at", -1))
     fills = list(db.simulator_fills.find({"session_id": session["id"]}, {"_id": 0}).sort("created_at", -1))
-    return {"id": session["id"], "mode": session["mode"], "instrument_id": session["instrument_id"], "clock": session["clock"], "state": session["state"], "speed": session["speed"], "assisted": session.get("assisted", False), "revision": session["revision"], "account": session["account"], "orders": orders, "fills": fills}
+    return {"id": session["id"], "mode": session["mode"], "instrument_id": session["instrument_id"], "data_source": session.get("data_source", "synthetic-test"), "clock": session["clock"], "state": session["state"], "speed": session["speed"], "assisted": session.get("assisted", False), "revision": session["revision"], "account": session["account"], "orders": orders, "fills": fills}
 
 
 def _records(db: Database, collection: str, session_id: str) -> list[dict]:
