@@ -1,21 +1,84 @@
 # This file sets up the connection to the MongoDB database.
 
+from typing import Any
+
 import pymongo
 from pymongo.database import Database
 
 from app.config import settings
 
-# MongoClient connection to MongoDB
-client: pymongo.MongoClient = pymongo.MongoClient(
-    settings.database_url,
-    serverSelectionTimeoutMS=5000,
-)
+def create_client() -> Any:
+    """Create the configured database client.
+
+    ``mongomock://`` is an explicit local-development mode so contributors can
+    run the account/player flow without a MongoDB daemon. Production URLs still
+    use a real PyMongo client; there is no silent fallback on connection errors.
+    """
+    if settings.database_url.startswith("mongomock://"):
+        try:
+            import mongomock
+        except ImportError as exc:  # pragma: no cover - packaging guard
+            raise RuntimeError(
+                "mongomock is required when DATABASE_URL uses mongomock://"
+            ) from exc
+        return mongomock.MongoClient()
+
+    return pymongo.MongoClient(
+        settings.database_url,
+        serverSelectionTimeoutMS=5000,
+    )
+
+
+# MongoClient connection to MongoDB (or explicit in-memory local development).
+client: Any = create_client()
 
 # Active database instance
 db: Database = client[settings.database_name]
 
 
 def init_db() -> None:
+    # DRM lesson indexes are created independently so one unrelated index
+    # failure cannot prevent the protected-player data model from initializing.
+    drm_index_specs = [
+        ("course_id_unique", db.courses, "id", {"unique": True, "name": "course_id_unique"}),
+        ("course_slug_unique", db.courses, "slug", {"unique": True, "name": "course_slug_unique"}),
+        ("lesson_id_unique", db.lessons, "id", {"unique": True, "name": "lesson_id_unique"}),
+        (
+            "lesson_course_published",
+            db.lessons,
+            [("course_id", pymongo.ASCENDING), ("published", pymongo.ASCENDING)],
+            {"name": "lesson_course_published"},
+        ),
+        (
+            "user_course_unique",
+            db.enrollments,
+            [("user_id", pymongo.ASCENDING), ("course_id", pymongo.ASCENDING)],
+            {"unique": True, "name": "user_course_unique"},
+        ),
+        (
+            "user_lesson_unique",
+            db.lesson_progress,
+            [("user_id", pymongo.ASCENDING), ("lesson_id", pymongo.ASCENDING)],
+            {"unique": True, "name": "user_lesson_unique"},
+        ),
+        (
+            "attempts_user_lesson_prompt",
+            db.prompt_attempts,
+            [
+                ("user_id", pymongo.ASCENDING),
+                ("lesson_id", pymongo.ASCENDING),
+                ("prompt_id", pymongo.ASCENDING),
+                ("attempted_at", pymongo.DESCENDING),
+            ],
+            {"name": "attempts_user_lesson_prompt"},
+        ),
+    ]
+    for label, collection, keys, options in drm_index_specs:
+        try:
+            collection.create_index(keys, **options)
+        except Exception as exc:
+            print(f"Warning ensuring MongoDB index {label}: {exc}")
+
     # Ensure production indexes exist across all domain collections
     try:
         # Identity

@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     def is_razorpay_mock(self) -> bool:
         return self.razorpay_mock_mode or not self.razorpay_key_id or self.razorpay_key_id.startswith("mock_")
 
+    # Mux signing is optional so unrelated APIs can start without video credentials.
+    mux_signing_key_id: str | None = None
+    mux_signing_private_key_base64: str | None = None
+    mux_playback_token_expire_minutes: int = 120
+    mux_playback_restriction_id: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
