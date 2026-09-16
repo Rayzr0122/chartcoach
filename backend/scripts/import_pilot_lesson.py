@@ -14,24 +14,37 @@ from typing import Any
 import pymongo
 
 from app.domain.learning import Lesson
+from app.services.playback_providers import migrate_lesson_media_assets
 
 
 COURSE_ID = "price-action-secrets"
 LESSON_ID = "l1"
 
 
-def _pilot_lesson(mux_playback_id: str, duration_seconds: float, caption_url: str) -> Lesson:
+def _pilot_lesson(
+    mux_playback_id: str | None,
+    duration_seconds: float,
+    caption_url: str,
+    media_asset_id: str | None = None,
+    thumbnail_url: str | None = None,
+) -> Lesson:
     if duration_seconds < 90:
         raise ValueError("Pilot lesson duration must be at least 90 seconds")
     first_end = round(duration_seconds * 0.32, 3)
     second_end = round(duration_seconds * 0.68, 3)
-    return Lesson.model_validate(
-        {
+
+    def thumbnail_at(seconds: float) -> str:
+        if thumbnail_url:
+            return thumbnail_url
+        if mux_playback_id:
+            return f"https://image.mux.com/{mux_playback_id}/thumbnail.jpg?time={seconds:.3f}"
+        raise ValueError("thumbnail_url is required for a local media asset")
+
+    payload: dict[str, Any] = {
             "id": LESSON_ID,
             "course_id": COURSE_ID,
             "title": "Price Action Foundations: Reading Market Structure",
             "duration_seconds": duration_seconds,
-            "mux_playback_id": mux_playback_id,
             "captions": {"language": "en", "label": "English", "url": caption_url},
             "published": True,
             "segments": [
@@ -43,7 +56,7 @@ def _pilot_lesson(mux_playback_id: str, duration_seconds: float, caption_url: st
                     "end_seconds": first_end,
                     "thumbnail": {
                         "time_seconds": round(first_end / 2, 3),
-                        "url": f"https://image.mux.com/{mux_playback_id}/thumbnail.jpg?time={first_end / 2:.3f}",
+                        "url": thumbnail_at(first_end / 2),
                     },
                     "required_prompt": {
                         "id": "structure-check",
@@ -65,7 +78,7 @@ def _pilot_lesson(mux_playback_id: str, duration_seconds: float, caption_url: st
                     "end_seconds": second_end,
                     "thumbnail": {
                         "time_seconds": round((first_end + second_end) / 2, 3),
-                        "url": f"https://image.mux.com/{mux_playback_id}/thumbnail.jpg?time={(first_end + second_end) / 2:.3f}",
+                        "url": thumbnail_at((first_end + second_end) / 2),
                     },
                     "required_prompt": {
                         "id": "retest-check",
@@ -87,24 +100,38 @@ def _pilot_lesson(mux_playback_id: str, duration_seconds: float, caption_url: st
                     "end_seconds": duration_seconds,
                     "thumbnail": {
                         "time_seconds": round((second_end + duration_seconds) / 2, 3),
-                        "url": f"https://image.mux.com/{mux_playback_id}/thumbnail.jpg?time={(second_end + duration_seconds) / 2:.3f}",
+                        "url": thumbnail_at((second_end + duration_seconds) / 2),
                     },
                     "required_prompt": None,
                 },
             ],
         }
-    )
+    if mux_playback_id:
+        payload["mux_playback_id"] = mux_playback_id
+    if media_asset_id:
+        payload["media_asset_id"] = media_asset_id
+    return Lesson.model_validate(payload)
 
 
 def upsert_pilot_lesson(
     db: Any,
     *,
-    mux_playback_id: str,
+    mux_playback_id: str | None,
     duration_seconds: float,
     caption_url: str,
     enrollment_email: str | None = None,
+    media_asset_id: str | None = None,
+    thumbnail_url: str | None = None,
 ) -> dict[str, int]:
-    lesson = _pilot_lesson(mux_playback_id, duration_seconds, caption_url)
+    if bool(mux_playback_id) == bool(media_asset_id):
+        raise ValueError("Provide exactly one of mux_playback_id or media_asset_id")
+    if media_asset_id and not db.media_assets.find_one(
+        {"id": media_asset_id, "source_provider": "local", "state": "ready", "published_generation_id": {"$type": "string"}}
+    ):
+        raise ValueError("Local media asset must be ready with a published generation")
+    lesson = _pilot_lesson(
+        mux_playback_id, duration_seconds, caption_url, media_asset_id, thumbnail_url
+    )
     now = datetime.now(timezone.utc)
     db.courses.update_one(
         {"id": COURSE_ID},
@@ -126,6 +153,8 @@ def upsert_pilot_lesson(
         {"$set": lesson_doc, "$setOnInsert": {"created_at": now}},
         upsert=True,
     )
+    if mux_playback_id:
+        migrate_lesson_media_assets(db)
 
     enrollment_count = 0
     if enrollment_email:
@@ -154,6 +183,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--database-name", default=os.getenv("DATABASE_NAME", "chartcoach"))
     parser.add_argument("--mux-playback-id", default=os.getenv("MUX_PLAYBACK_ID"))
+    parser.add_argument("--media-asset-id", default=os.getenv("PILOT_MEDIA_ASSET_ID"))
+    parser.add_argument("--thumbnail-url", default=os.getenv("PILOT_THUMBNAIL_URL"))
     parser.add_argument(
         "--duration-seconds",
         type=float,
@@ -169,8 +200,10 @@ def main() -> None:
     args = parser.parse_args()
     if not args.database_url:
         parser.error("--database-url or DATABASE_URL is required")
-    if not args.mux_playback_id:
-        parser.error("--mux-playback-id or MUX_PLAYBACK_ID is required")
+    if bool(args.mux_playback_id) == bool(args.media_asset_id):
+        parser.error("Provide exactly one of --mux-playback-id or --media-asset-id")
+    if args.media_asset_id and not args.thumbnail_url:
+        parser.error("--thumbnail-url is required with --media-asset-id")
     if not args.caption_url:
         parser.error("--caption-url or PILOT_CAPTION_URL is required")
 
@@ -178,6 +211,8 @@ def main() -> None:
     counts = upsert_pilot_lesson(
         client[args.database_name],
         mux_playback_id=args.mux_playback_id,
+        media_asset_id=args.media_asset_id,
+        thumbnail_url=args.thumbnail_url,
         duration_seconds=args.duration_seconds,
         caption_url=args.caption_url,
         enrollment_email=args.enrollment_email,

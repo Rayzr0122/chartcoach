@@ -96,13 +96,16 @@ class Lesson(BaseModel):
     course_id: str = Field(min_length=1)
     title: str = Field(min_length=1)
     duration_seconds: float
-    mux_playback_id: str = Field(min_length=1)
+    mux_playback_id: str | None = Field(default=None, min_length=1)
+    media_asset_id: str | None = Field(default=None, min_length=1)
     captions: CaptionMetadata
     published: bool = False
     segments: list[LessonSegment] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_timeline(self) -> "Lesson":
+        if not self.media_asset_id and not self.mux_playback_id:
+            raise ValueError("lesson must reference a media asset")
         if not math.isfinite(self.duration_seconds) or self.duration_seconds <= 0:
             raise ValueError("lesson duration must be finite and positive")
         previous_end = 0.0

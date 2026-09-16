@@ -2,6 +2,7 @@
 # It creates the app, sets up CORS, and connects all the routes.
 
 from contextlib import asynccontextmanager
+from time import perf_counter
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
@@ -10,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api import auth, courses, face, monitor, users
+from app.api import auth, courses, face, learning, media, monitor, users
 from app.api.v1 import (
     courses as courses_v1,
     dashboard as dashboard_v1,
@@ -20,7 +21,6 @@ from app.api.v1 import (
     gems as gems_v1,
     coach as coach_v1,
 )
-from app.api import learning
 from app.config import settings
 from app.core.face_engine import load_face_app
 from app.core.rate_limit import limiter
@@ -32,6 +32,7 @@ from app.core.errors import (
     generate_request_id,
 )
 from app.database import init_db
+from app.services.drm_readiness import get_drm_readiness
 
 
 @asynccontextmanager
@@ -52,6 +53,15 @@ async def correlation_id_middleware(request, call_next):
     request.state.request_id = request.headers.get("x-request-id") or generate_request_id()
     response = await call_next(request)
     response.headers["x-request-id"] = request.state.request_id
+    return response
+
+
+@app.middleware("http")
+async def server_timing_middleware(request, call_next):
+    started_at = perf_counter()
+    response = await call_next(request)
+    if request.url.path.startswith("/learning/lessons/"):
+        response.headers["Server-Timing"] = f"app;dur={(perf_counter() - started_at) * 1000:.1f}"
     return response
 
 # Wire up rate limiting & standardized error envelopes
@@ -77,6 +87,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Server-Timing", "X-Request-ID"],
 )
 
 # Connect the route files to the app
@@ -84,6 +95,8 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(face.router)
 app.include_router(monitor.router)
+app.include_router(learning.router)
+app.include_router(media.router)
 app.include_router(courses.router)
 # Version 1 Modular Domain Routes
 app.include_router(dashboard_v1.router)
@@ -93,10 +106,15 @@ app.include_router(market_v1.router)
 app.include_router(billing_v1.router)
 app.include_router(gems_v1.router)
 app.include_router(coach_v1.router)
-app.include_router(learning.router)
 
 
 @app.get("/health")
 def health_check():
     # Simple route to check the API is running
     return {"status": "ok"}
+
+
+@app.get("/health/drm")
+def drm_health_check():
+    """Expose non-secret DRM readiness for local operators and diagnostics."""
+    return get_drm_readiness(settings)

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
 from app.domain.learning import Lesson, ProgressError, normalize_progress, validate_progress_observation
+from app.config import settings
+from app.services.playback_providers import PlaybackProviderUnavailable
+from app.services.watermarking import build_watermark_identity
 
 
 class LessonNotFound(RuntimeError):
@@ -30,7 +33,7 @@ class PromptNotFound(RuntimeError):
 class LearningService:
     def __init__(self, db: Any, signer: Any) -> None:
         self.db = db
-        self.signer = signer
+        self.playback_provider = signer
 
     @staticmethod
     def _user_id(user: Any) -> str:
@@ -136,8 +139,77 @@ class LearningService:
 
     def start_playback(self, lesson_id: str, user: Any) -> dict[str, Any]:
         lesson = self._load_authorized_lesson(lesson_id, user)
-        capabilities = self.signer.authorize(lesson.mux_playback_id, lesson.duration_seconds)
+        asset = (
+            self.db.media_assets.find_one({"id": lesson.media_asset_id})
+            if lesson.media_asset_id
+            else None
+        )
+        # Compatibility for records which have not yet passed the idempotent
+        # media-asset migration. New records must always use media_asset_id.
+        if not asset:
+            if not lesson.mux_playback_id:
+                raise LessonNotFound("Lesson media was not found")
+            asset = {
+                "id": f"mux-{lesson.mux_playback_id}",
+                "source_provider": "mux",
+                "provider_asset_id": lesson.mux_playback_id,
+            }
         session_id = uuid4().hex
+        capabilities = self.playback_provider.authorize(asset, lesson.duration_seconds, session_id)
+        watermark_mode = settings.watermark_mode.lower()
+        watermark = None
+        if watermark_mode == "server":
+            if not settings.watermark_secret or not settings.watermark_renderer_enabled:
+                raise PlaybackProviderUnavailable("Server-side watermarking is not ready")
+            if lesson.media_asset_id:
+                generation = self.db.media_generations.find_one(
+                    {
+                        "id": asset.get("published_generation_id"),
+                        "asset_id": asset.get("id"),
+                        "state": "published",
+                        "watermark.mode": "server",
+                    }
+                )
+                if not generation:
+                    raise PlaybackProviderUnavailable(
+                        "Server-side watermark output is not ready"
+                    )
+            watermark = build_watermark_identity(user.email, session_id, settings.watermark_secret)
+            capabilities["watermark"] = {
+                "mode": "server",
+                "visible_text": watermark["visible_text"],
+                "segment_duration_seconds": 10,
+                "forensic_algorithm": watermark["algorithm"],
+            }
+        now = datetime.now(timezone.utc)
+        try:
+            expires_at = datetime.fromisoformat(str(capabilities["expires_at"]).replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            expires_at = now + timedelta(minutes=15)
+        self.db.playback_sessions.update_many(
+            {
+                "user_id": self._user_id(user),
+                "lesson_id": lesson.id,
+                "status": "active",
+            },
+            {"$set": {"status": "rotated", "rotated_at": now}},
+        )
+        self.db.playback_sessions.insert_one(
+            {
+                "id": session_id,
+                "user_id": self._user_id(user),
+                "lesson_id": lesson.id,
+                "course_id": lesson.course_id,
+                "asset_id": asset["id"],
+                "generation_id": asset.get("published_generation_id"),
+                "status": "active",
+                "created_at": now,
+                "expires_at": expires_at,
+                "watermark_mode": watermark_mode,
+                "watermark_visible_text": watermark["visible_text"] if watermark else None,
+                "watermark_forensic_id": watermark["forensic_id"] if watermark else None,
+            }
+        )
         progress = self._normalized_progress(
             lesson,
             user,
@@ -151,6 +223,14 @@ class LearningService:
             "resume_position_seconds": progress["resume_position_seconds"],
             "pending_prompt_id": progress["pending_prompt_id"],
         }
+
+    def renew_playback(
+        self, lesson_id: str, user: Any, playback_session_id: str
+    ) -> dict[str, Any]:
+        stored = self._progress_doc(lesson_id, user)
+        if not stored or stored.get("playback_session_id") != playback_session_id:
+            raise PlaybackSessionMismatch("Playback session is missing or has been rotated")
+        return self.start_playback(lesson_id, user)
 
     def update_progress(
         self,

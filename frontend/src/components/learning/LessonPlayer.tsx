@@ -3,6 +3,7 @@ import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import LessonTranscript from "./LessonTranscript";
 import LessonChat from "./LessonChat";
+import LessonTour from "./LessonTour";
 import * as learningApi from "@/lib/learning-api";
 import type {
   LessonMetadata,
@@ -29,6 +30,7 @@ type Props = {
   onUnauthorized: () => void;
   onRetry?: () => void;
   previewMode?: boolean;
+  tourStorageKey?: string;
 };
 export default function LessonPlayer({
   lesson,
@@ -38,16 +40,19 @@ export default function LessonPlayer({
   onUnauthorized,
   onRetry,
   previewMode = false,
+  tourStorageKey,
 }: Props) {
   const video = useRef<HTMLVideoElement>(null),
-    container = useRef<HTMLDivElement>(null),
+    playerSurface = useRef<HTMLDivElement>(null),
     dialog = useRef<HTMLDivElement>(null),
     play = useRef<HTMLButtonElement>(null);
   const controller = useRef<LessonController | null>(null);
   const seekTo = useCallback((seconds: number) => controller.current?.seek(seconds), []);
   const [view, setView] = useState<LessonView | null>(null);
   const [expanded, setExpanded] = useState(false),
-    [preview, setPreview] = useState<LessonSegment | null>(null);
+    [preview, setPreview] = useState<LessonSegment | null>(null),
+    [speedNotice, setSpeedNotice] = useState(false),
+    [tourRequest, setTourRequest] = useState(0);
   useEffect(() => {
     const element = video.current!;
     const instance = new LessonController(
@@ -60,16 +65,7 @@ export default function LessonPlayer({
     );
     controller.current = instance;
     void instance.start();
-    const exitNative = () => {
-      instance.pause();
-      (
-        element as HTMLVideoElement & { webkitExitFullscreen?: () => void }
-      ).webkitExitFullscreen?.();
-      setExpanded(true);
-    };
-    element.addEventListener("webkitbeginfullscreen", exitNative);
     return () => {
-      element.removeEventListener("webkitbeginfullscreen", exitNative);
       instance.destroy();
       controller.current = null;
     };
@@ -77,6 +73,7 @@ export default function LessonPlayer({
   const prompt = view?.prompt;
   const warning = view?.seekWarning;
   const seekNotice = view?.seekNotice;
+  const seekBlocked = view?.seekBlocked;
   const modalOpen = Boolean(prompt || warning);
   useEffect(() => {
     if (!seekNotice) return;
@@ -86,6 +83,16 @@ export default function LessonPlayer({
     );
     return () => window.clearTimeout(timeout);
   }, [seekNotice]);
+  useEffect(() => {
+    if (!seekBlocked) return;
+    const timeout = window.setTimeout(() => controller.current?.dismissSeekBlocked(), 4500);
+    return () => window.clearTimeout(timeout);
+  }, [seekBlocked]);
+  useEffect(() => {
+    if (!speedNotice) return;
+    const timeout = window.setTimeout(() => setSpeedNotice(false), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [speedNotice]);
   useEffect(() => {
     if (prompt || warning) {
       dialog.current
@@ -98,18 +105,24 @@ export default function LessonPlayer({
       await document.exitFullscreen();
       setExpanded(false);
     } else if (expanded) setExpanded(false);
-    else if (container.current?.requestFullscreen) {
+    else if (playerSurface.current?.requestFullscreen) {
       try {
-        await container.current.requestFullscreen();
+        await playerSurface.current.requestFullscreen();
         setExpanded(true);
       } catch {
         setExpanded(true);
       }
-    } else setExpanded(true);
+    } else {
+      const nativeVideo = video.current as HTMLVideoElement & {
+        webkitEnterFullscreen?: () => void;
+      };
+      if (nativeVideo?.webkitEnterFullscreen) nativeVideo.webkitEnterFullscreen();
+      else setExpanded(true);
+    }
   }
   useEffect(() => {
     const changed = () => {
-      if (!document.fullscreenElement) setExpanded(false);
+      setExpanded(document.fullscreenElement === playerSurface.current);
     };
     document.addEventListener("fullscreenchange", changed);
     return () => document.removeEventListener("fullscreenchange", changed);
@@ -138,20 +151,23 @@ export default function LessonPlayer({
     if (key === "arrowright") c.seek(s.position + 5);
   }
   const s = view?.snapshot,
-    position = s?.position ?? authorization.resume_position_seconds;
+    position = s?.position ?? authorization.resume_position_seconds,
+    seekableUntil = Math.min(
+      lesson.duration_seconds,
+      Math.max(position, view?.seekableUntil ?? position),
+    );
   const active =
     lesson.segments.find(
       (segment) =>
         position >= segment.start_seconds && position < segment.end_seconds,
     ) ?? lesson.segments.at(-1);
   return (
-    <div
-      ref={container}
-      className={`${styles.workspace} ${expanded ? styles.expanded : ""}`}
-    >
+    <div className={styles.workspace}>
       <div className={styles.mediaColumn}>
       <div
-        className={styles.player}
+        ref={playerSurface}
+        className={`${styles.player} ${expanded ? styles.playerExpanded : ""}`}
+        data-tour-target="player"
         role="region"
         aria-label="Lesson video"
         tabIndex={0}
@@ -185,18 +201,18 @@ export default function LessonPlayer({
           )}
         </div>
         <div className={styles.controls} inert={modalOpen}>
-          <div className={styles.timeline}>
+          <div className={styles.timeline} data-tour-target="seek">
             <input
               type="range"
               aria-label="Playback position"
-              title="Seek backward / forward (← / →)"
+              title="Seek within the part you have watched"
               min={0}
               max={lesson.duration_seconds}
               step={0.1}
               value={position}
               onChange={(e) => controller.current?.seek(Number(e.target.value))}
               style={{
-                background: `linear-gradient(to right, #ff167d ${(position / lesson.duration_seconds) * 100}%, #ffffff40 0)`,
+                background: `linear-gradient(to right, #ff167d 0 ${(position / lesson.duration_seconds) * 100}%, #ffffffa8 ${(position / lesson.duration_seconds) * 100}% ${(seekableUntil / lesson.duration_seconds) * 100}%, #ffffff40 ${(seekableUntil / lesson.duration_seconds) * 100}% 100%)`,
               }}
             />
             <div className={styles.markers}>
@@ -295,7 +311,7 @@ export default function LessonPlayer({
             <span className={styles.clock}>
               {time(position)} / {time(lesson.duration_seconds)}
             </span>
-            <select className={styles.speed} aria-label="Playback speed" title="Playback speed" value={s?.playbackRate ?? 1} disabled={!view?.ready} onChange={(event) => controller.current?.setPlaybackRate(Number(event.target.value))}>
+            <select className={styles.speed} aria-label="Playback speed" title="Playback speed" value={s?.playbackRate ?? 1} disabled={!view?.ready} onChange={(event) => { const rate = Number(event.target.value); controller.current?.setPlaybackRate(rate); setSpeedNotice(rate >= 1.75); }}>
               {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
             </select>
             <button
@@ -309,11 +325,21 @@ export default function LessonPlayer({
                 controller.current?.setCaptions(!s?.captionsEnabled)
               }
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M10 9H7v6h3m9-6h-3v6h3" /></svg>
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M10 9H7v6h3m9-6h-3v6h3" /></svg>
             </button>
+            {tourStorageKey && (
+              <button
+                type="button"
+                aria-label="Open player tutorial"
+                data-tooltip="Player tutorial"
+                onClick={() => setTourRequest((request) => request + 1)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M9.6 9a2.5 2.5 0 1 1 4.2 1.8c-1.2 1-1.8 1.3-1.8 2.7M12 17h.01" /></svg>
+              </button>
+            )}
             <button
               type="button"
-              aria-label={expanded ? "Exit expanded view" : "Expand player"}
+              aria-label={expanded ? "Exit fullscreen" : "Expand player"}
               data-tooltip={expanded ? "Exit fullscreen (F)" : "Fullscreen (F)"}
               aria-keyshortcuts="f"
               onClick={() => void fullscreen()}
@@ -380,13 +406,28 @@ export default function LessonPlayer({
             </li>
           ))}
         </ol>
-        <p className={styles.progress} aria-live="polite">
+        <p data-tour-target="progress" className={styles.progress} aria-live="polite">
           {view?.progress.completed
             ? "Lesson complete"
             : `${Math.round(view?.progress.watch_percent ?? 0)}% watched · Progress saved as you learn`}
         </p>
       </aside>
       </div>
+      {tourStorageKey && <LessonTour storageKey={tourStorageKey} openRequest={tourRequest} />}
+      {seekBlocked && !modalOpen && (
+        <div className={styles.seekNotice} role="status" aria-label="Forward seeking unavailable">
+          <div><strong>This section is not unlocked yet</strong></div>
+          <p>You can seek forward through video you have already watched. Watch this section naturally first so progress and required questions stay accurate.</p>
+          <button type="button" aria-label="Dismiss forward seeking notice" onClick={() => controller.current?.dismissSeekBlocked()}>×</button>
+        </div>
+      )}
+      {speedNotice && !modalOpen && (
+        <div className={styles.seekNotice} role="status" aria-label="Playback speed reminder">
+          <div><strong>Fast playback reminder</strong></div>
+          <p>At 1.75× or 2×, this may make it harder to absorb the lesson and retain key ideas.</p>
+          <button type="button" aria-label="Dismiss playback speed reminder" onClick={() => setSpeedNotice(false)}>×</button>
+        </div>
+      )}
       {seekNotice && !modalOpen && (
         <div className={styles.seekNotice} role="status" aria-label="Skip reminder">
           <div>

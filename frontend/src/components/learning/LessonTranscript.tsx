@@ -31,7 +31,7 @@ export default function LessonTranscript({ url, duration, position, language, on
     if (region && line) region.scrollTo?.({ top: line.offsetTop - region.clientHeight / 2 + line.clientHeight / 2, behavior: "instant" });
   }, [active?.id, follow, search]);
   const filtered = cues.filter((cue) => cue.text.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
-  return <section className={styles.transcript} aria-label="Interactive transcript" inert={disabled}>
+  return <section data-tour-target="transcript" className={styles.transcript} aria-label="Interactive transcript" inert={disabled}>
     <header className={styles.panelHeader}>
       <div><h2>Transcript</h2><p>{language} · Synced to video</p></div>
       <button type="button" aria-pressed={follow} onClick={() => { setSearch(""); setFollow(!follow); }}>{follow ? "Following video" : "Follow video"}</button>

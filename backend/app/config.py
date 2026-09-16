@@ -22,10 +22,27 @@ class Settings(BaseSettings):
     # Polygon.io API key for live financial market data & TradingView charts
     polygon_api_key: str = "u2kEX_q5yC8uBLevrFS13IjJjVvpe3eL"
 
-    # Whether the login cookie requires HTTPS
+    # Whether the login cookie requires HTTPS. Keep False for local dev over
+    # plain http://, but this MUST be True in any real deployment.
     cookie_secure: bool = False
 
-    # Razorpay Recurring Subscriptions & Webhooks (Phase 1)
+    app_environment: str = "development"
+    playback_provider: str = "mux"
+    # Vendor DRM credentials may remain pending while local encrypted
+    # playback is used for development verification.
+    drm_credentials_status: str = "pending"
+    media_base_url: str = "http://127.0.0.1:8000"
+    local_playback_session_minutes: int = 15
+    local_media_wrapping_secret: str | None = None
+    media_root: str = "../.media"
+    # Production must select a real server-side renderer. The local proof keeps
+    # this disabled so existing Clear Key fixtures remain playable.
+    watermark_mode: str = "disabled"
+    watermark_secret: str | None = None
+    watermark_startup_budget_seconds: int = 5
+    watermark_renderer_enabled: bool = False
+
+    # Razorpay subscription and webhook settings.
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""

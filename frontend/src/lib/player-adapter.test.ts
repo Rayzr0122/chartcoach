@@ -22,7 +22,7 @@ function setup(fairplay = false) {
   ];
   const player = {
     attach: async () => {},
-    load: async () => {},
+    load: vi.fn(async () => {}),
     destroy: async () => {
       destroyed++;
     },
@@ -171,6 +171,42 @@ it("configures only the FairPlay path with scoped filters and certificate, dispo
   await widevine.adapter.load(source, 0);
   expect(widevine.filters.size).toBe(0);
   await widevine.adapter.destroy();
+});
+it("does not apply Mux FairPlay transforms to a local provider contract", async () => {
+  const t = setup(true);
+  await t.adapter.load(
+    { ...source, provider: "local", drm: { type: "development-clear-key" } },
+    0,
+  );
+  expect(t.filters.size).toBe(1);
+  expect(t.configuration).not.toContainEqual(
+    expect.objectContaining({ streaming: { useNativeHlsForFairPlay: true } }),
+  );
+  await t.adapter.destroy();
+});
+it("configures development Clear Key with DASH and credentialed license requests", async () => {
+  const t = setup();
+  const local = {
+    ...source,
+    provider: "local" as const,
+    manifest_url: "http://127.0.0.1:8000/media/playback-sessions/session-1/manifest.mpd",
+    drm: {
+      type: "development-clear-key" as const,
+      license_url: "http://127.0.0.1:8000/media/playback-sessions/session-1/clearkey",
+    },
+  };
+
+  await t.adapter.load(local, 0);
+
+  expect(t.configuration).toContainEqual(
+    expect.objectContaining({
+      drm: { servers: { "org.w3.clearkey": local.drm.license_url } },
+    }),
+  );
+  expect(t.player.load).toHaveBeenCalledWith(local.manifest_url, 0, "application/dash+xml");
+  expect(t.filters.size).toBe(1);
+  await t.adapter.destroy();
+  expect(t.filters.size).toBe(0);
 });
 it("ignores a stale load after destroy during engine import", async () => {
   const t = setup();

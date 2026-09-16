@@ -85,3 +85,40 @@ it("renders the authorized lesson using the adapter seam", async () => {
   ).toBeVisible();
   vi.unstubAllGlobals();
 });
+
+it("labels local protected playback while vendor credentials are pending", async () => {
+  vi.stubGlobal(
+    "fetch",
+    async () =>
+      new Response(
+        JSON.stringify({ id: "u", email: "a@test", full_name: "Learner" }),
+      ),
+  );
+  render(
+    <AuthProvider>
+      <LessonExperience
+        lessonId="l1"
+        api={
+          {
+            getLesson: async () => lesson,
+            authorizePlayback: async () => ({
+              ...authorization,
+              provider: "local",
+              drm: { type: "development-clear-key" },
+              drm_readiness: {
+                mode: "development-clear-key",
+                credentials_status: "pending",
+                production_ready: false,
+              },
+            }),
+          } as never
+        }
+        factory={() => new FakePlayer()}
+      />
+    </AuthProvider>,
+  );
+  expect(
+    await screen.findByText(/development protected playback/i),
+  ).toBeVisible();
+  vi.unstubAllGlobals();
+});

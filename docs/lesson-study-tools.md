@@ -1,6 +1,6 @@
 # Local lesson study tools
 
-Open http://127.0.0.1:3000/learn/l1?preview=1 with the frontend development server running.
+Open http://127.0.0.1:3000/learn/price-action-secrets/1?preview=1 with the frontend development server running.
 
 Playback supports 0.5x–2x. The searchable transcript uses the supplied timed Hindi captions and the video's current playback position, including after seeks and speed changes. Select a line to seek; use Follow video to return to automatic scrolling. Transcript and assistant reference links use the same seek warnings and required-question gates as the timeline. Caption timing and wording are only as accurate as the supplied auto-generated track; cues are clipped at the actual video end.
 

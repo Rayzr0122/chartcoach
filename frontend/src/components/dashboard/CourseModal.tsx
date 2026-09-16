@@ -107,7 +107,7 @@ export default function CourseModal({
 
               {!isPlaying ? (
                 <div className="text-center space-y-3 z-10 p-4">
-                  {selectedLesson?.id === "l1" && selectedLesson.type === "video" ? <Link href="/learn/l1" className="inline-flex rounded-xl bg-blue-600 px-6 py-4 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-4">Open lesson</Link> : <button
+                  {selectedLesson?.id === "l1" && selectedLesson.type === "video" ? <Link href="/learn/price-action-secrets/1" className="inline-flex rounded-xl bg-blue-600 px-6 py-4 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-4">Open lesson</Link> : <button
                     type="button"
                     onClick={() => setIsPlaying(true)}
                     className="w-16 h-16 rounded-full bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center mx-auto shadow-xl hover:scale-105 transition-all cursor-pointer ring-4 ring-white/10"
@@ -237,7 +237,7 @@ export default function CourseModal({
                                   </svg>
                                 )}
                               </div>
-                              {lesson.id === "l1" && lesson.type === "video" ? <Link href="/learn/l1" className="text-xs font-bold text-blue-600 rounded focus-visible:outline-2 focus-visible:outline-offset-4">{lesson.title}</Link> : <span className={`text-xs truncate ${isCurrent ? "font-bold text-blue-600" : "text-slate-700"}`}>
+                              {lesson.id === "l1" && lesson.type === "video" ? <Link href="/learn/price-action-secrets/1" className="text-xs font-bold text-blue-600 rounded focus-visible:outline-2 focus-visible:outline-offset-4">{lesson.title}</Link> : <span className={`text-xs truncate ${isCurrent ? "font-bold text-blue-600" : "text-slate-700"}`}>
                                 {lesson.title}
                               </span>}
                             </div>

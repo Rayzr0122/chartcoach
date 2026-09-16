@@ -1,5 +1,6 @@
 import type Shaka from "shaka-player";
 import type { LessonMetadata, PlaybackAuthorization } from "./learning-api";
+import { createPlaybackStartupTimer } from "./playback-timing";
 
 export type PlaybackError = {
   category: "unsupported" | "authorization" | "network" | "drm" | "media";
@@ -42,7 +43,7 @@ export interface PlayerAdapter {
   subscribe(listener: (event: PlaybackEvent) => void): () => void;
   capabilities(): {
     fullscreen: boolean;
-    drm: "fairplay" | "widevine-playready" | "unknown";
+    drm: "fairplay" | "widevine-playready" | "clearkey" | "unknown";
   };
   destroy(): Promise<void>;
 }
@@ -89,7 +90,7 @@ export function createPlayerAdapter(
     generation = 0,
     buffering = false,
     captionsAvailable = false;
-  let drm: "fairplay" | "widevine-playready" | "unknown" = "unknown";
+  let drm: "fairplay" | "widevine-playready" | "clearkey" | "unknown" = "unknown";
   let disposal: Promise<void> | undefined;
   let queue: Promise<void> = Promise.resolve();
   const listeners = new Set<(event: PlaybackEvent) => void>();
@@ -163,11 +164,20 @@ export function createPlayerAdapter(
       const ticket = ++generation;
       const load = async () => {
         if (disposed || ticket !== generation) return;
+        const timing = createPlaybackStartupTimer(
+          `player:${source.provider ?? source.drm?.type ?? "unknown"}`,
+          undefined,
+          process.env.NODE_ENV === "test"
+            ? undefined
+            : (report) => console.info("[ChartCoach playback startup]", report),
+        );
         try {
           await releasePlayer();
           const runtime = await importEngine();
+          timing.mark("engine_import");
           if (disposed || ticket !== generation) return;
           const fairplay = await runtime.drm.FairPlay.isFairPlaySupported();
+          timing.mark("drm_capability_check");
           if (disposed || ticket !== generation) return;
           runtime.polyfill.installAll();
           if (fairplay && !appleInstalled.has(runtime)) {
@@ -205,20 +215,44 @@ export function createPlayerAdapter(
             releases.push(() => instance.removeEventListener(name, cb));
           }
           await instance.attach(video);
+          timing.mark("player_attach");
           if (disposed || ticket !== generation) return;
-          drm = fairplay ? "fairplay" : "widevine-playready";
+          const providerDrm = source.drm?.type ?? "mux";
+          drm = providerDrm === "development-clear-key"
+            ? "clearkey"
+            : fairplay
+              ? "fairplay"
+              : "widevine-playready";
           instance.configure({
             preferredText: [{ language: "en" }],
             textDisplayFactory: () =>
               new runtime.text.NativeTextDisplayer(instance),
-            drm: {
-              servers: {
-                "com.widevine.alpha": source.widevine_license_url,
-                "com.microsoft.playready": source.playready_license_url,
-              },
-            },
+            drm: providerDrm === "development-clear-key"
+              ? { servers: { "org.w3.clearkey": source.drm?.license_url ?? "" } }
+              : {
+                  servers: {
+                    "com.widevine.alpha": source.widevine_license_url,
+                    "com.microsoft.playready": source.playready_license_url,
+                  },
+                  advanced: source.drm_policy
+                    ? {
+                        "com.widevine.alpha": {
+                          videoRobustness: source.drm_policy.widevine_video_robustness,
+                          audioRobustness: source.drm_policy.widevine_audio_robustness,
+                        },
+                      }
+                    : undefined,
+                },
           });
-          if (fairplay) {
+          if (providerDrm === "development-clear-key") {
+            const network = instance.getNetworkingEngine();
+            const credentials: Shaka.extern.RequestFilter = (_type, request) => {
+              request.allowCrossSiteCredentials = true;
+            };
+            network?.registerRequestFilter(credentials);
+            releases.push(() => network?.unregisterRequestFilter(credentials));
+          }
+          if (fairplay && providerDrm === "mux") {
             const helpers = runtime.drm.FairPlay;
             if (
               !helpers.muxFairPlayRequest ||
@@ -269,8 +303,11 @@ export function createPlayerAdapter(
           await instance.load(
             source.manifest_url,
             Math.max(0, Number.isFinite(start) ? start : 0),
-            "application/x-mpegURL",
+            providerDrm === "development-clear-key"
+              ? "application/dash+xml"
+              : "application/x-mpegURL",
           );
+          timing.mark("manifest_and_license");
           if (disposed || ticket !== generation) return;
           if (
             captions &&
@@ -288,8 +325,11 @@ export function createPlayerAdapter(
             );
           if (disposed || ticket !== generation) return;
           onTracks();
+          timing.mark("captions");
           buffering = false;
           emit("ready");
+          timing.mark("ready");
+          timing.report();
         } catch (error) {
           if (disposed || ticket !== generation) return;
           const normalized =

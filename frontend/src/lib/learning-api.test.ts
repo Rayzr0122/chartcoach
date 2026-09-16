@@ -25,6 +25,7 @@ it("sends cookie-authenticated lesson requests and exact progress/attempt payloa
   });
   expect(await api.getLesson("l1")).toEqual({ lesson_id: "l1" });
   await api.authorizePlayback("l1");
+  await api.renewPlayback("l1", "s");
   await api.saveProgress("l1", {
     playback_session_id: "s",
     position_seconds: 8,
@@ -40,18 +41,23 @@ it("sends cookie-authenticated lesson requests and exact progress/attempt payloa
     "include",
     "include",
     "include",
+    "include",
   ]);
   expect(requests.map((r) => r.init.method)).toEqual([
     "GET",
     "POST",
+    "POST",
     "PUT",
     "POST",
   ]);
-  expect(JSON.parse(requests[2].init.body as string)).toEqual({
+  expect(requests[0].url).toBe("http://localhost:8000/learning/lessons/l1");
+  expect(requests[1].url).toMatch(/\/lessons\/l1\/playback-sessions$/);
+  expect(requests[2].url).toMatch(/\/lessons\/l1\/playback-sessions\/s\/renew$/);
+  expect(JSON.parse(requests[3].init.body as string)).toEqual({
     playback_session_id: "s",
     position_seconds: 8,
     start_seconds: 0,
     end_seconds: 8,
   });
-  expect(requests[3].url).toMatch(/\/lessons\/l1\/prompts\/q1\/attempts$/);
+  expect(requests[4].url).toMatch(/\/lessons\/l1\/prompts\/q1\/attempts$/);
 });
