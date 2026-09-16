@@ -14,6 +14,7 @@ from pymongo.database import Database
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.models.user import User
+from app.domain.execution import OrderCommand, Policy, Quote, Side, OrderType, decide_fill
 from app.services.polygon_service import polygon_service
 
 router = APIRouter(prefix="/api/v1/simulator", tags=["simulator"])
@@ -259,13 +260,22 @@ async def create_order(session_id: str, payload: OrderCreate, idempotency_key: s
         if not quote or quote.source != "polygon":
             raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "Polygon delayed quote is unavailable; the order was not submitted."})
         price = Decimal(str(quote.price))
+    execution = decide_fill(
+        OrderCommand(Side(payload.side), OrderType(payload.order_type), payload.quantity, payload.limit_price, payload.stop_price, payload.reduce_only),
+        Quote(price, price, price, int(datetime.now(timezone.utc).timestamp())),
+        Policy(),
+    ) if payload.order_type == "market" else None
+    if payload.order_type == "market" and execution is None:
+        raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "A current execution quote is unavailable; the order was not submitted."})
+    if execution is not None:
+        price = execution.price
     notional = price * payload.quantity
     cash = Decimal(session["account"]["cash"])
     if payload.side == "buy" and notional > cash:
         raise HTTPException(409, detail={"code": "INSUFFICIENT_BUYING_POWER", "message": "Order exceeds available virtual cash."})
     order = {"id": f"ord_{uuid4().hex}", "session_id": session_id, "side": payload.side, "order_type": payload.order_type, "quantity": str(payload.quantity), "price": _money(price), "status": "filled" if payload.order_type == "market" else "open", "created_at": _now(), "reduce_only": payload.reduce_only}
     if order["status"] == "filled":
-        fee = notional * Decimal("0.0005")
+        fee = execution.fee if execution is not None else notional * Decimal("0.0005")
         delta = -notional - fee if payload.side == "buy" else notional - fee
         session["account"]["cash"] = _money(cash + delta)
         session["account"]["equity"] = session["account"]["cash"]
