@@ -14,7 +14,7 @@ export function resolveApiUrl(configured: string | undefined, location?: Browser
   if (configured?.trim()) return configured.trim().replace(/\/$/, "");
   const browser = location ?? (typeof window === "undefined" ? undefined : window.location);
   if (browser) return `${browser.protocol}//${browser.hostname}:8000`;
-  return "http://127.0.0.1:8000";
+  return "http://localhost:8000";
 }
 
 const API_URL = resolveApiUrl(process.env.NEXT_PUBLIC_API_URL);
@@ -199,7 +199,7 @@ export async function removeFace(): Promise<void> {
 export function getMonitorSocketUrl(): string {
   // The login cookie rides along automatically on this connection too,
   // since it is same-site with the backend.
-  const wsUrl = (API_URL || "http://127.0.0.1:8001").replace(/^http/, "ws");
+  const wsUrl = API_URL.replace(/^http/, "ws");
   return `${wsUrl}/ws/monitor`;
 }
 

@@ -1,1 +1,1 @@
-"""Business rules shared by ChartCoach services and APIs."""
+"""Pure simulator domain logic."""

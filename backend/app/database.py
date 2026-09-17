@@ -37,7 +37,7 @@ db: Database = client[settings.database_name]
 
 
 def init_db() -> None:
-    # Keep the market-product indexes, subscription indexes, and protected-learning indexes
+    # Keep the market-product indexes and the protected-learning indexes
     # independent so a failure in one collection does not block startup.
     index_specs = [
         ("users_email", db.users, "email", {"unique": True}),
@@ -133,22 +133,26 @@ def init_db() -> None:
         ("ai_messages_order", db.ai_messages, [("conversation_id", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)], {}),
         ("notifications_recent", db.notifications, [("user_id", pymongo.ASCENDING), ("read_at", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)], {}),
         ("session_registration_unique", db.session_registrations, [("session_id", pymongo.ASCENDING), ("user_id", pymongo.ASCENDING)], {"unique": True}),
-        
-        # Subscriptions & Billing (Phase 1 & Phase 2)
-        ("subscription_plans_slug_unique", db.subscriptionPlans, "slug", {"unique": True}),
+        ("subscription_plans_slug", db.subscriptionPlans, "slug", {"unique": True}),
         ("subscriptions_user_status", db.subscriptions, [("user_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)], {}),
-        ("subscriptions_razorpay_id_unique", db.subscriptions, "razorpay_subscription_id", {"unique": True, "sparse": True}),
-        ("payments_razorpay_id_unique", db.payments, "razorpay_payment_id", {"unique": True, "sparse": True}),
-        ("payments_user_recent", db.payments, [("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)], {}),
-        ("gem_wallets_user_unique", db.gemWallets, "user_id", {"unique": True}),
-        ("gem_transactions_user_recent", db.gemTransactions, [("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)], {}),
+        ("subscriptions_razorpay_id", db.subscriptions, "razorpay_subscription_id", {"unique": True, "sparse": True}),
+        ("payments_razorpay_id", db.payments, "razorpay_payment_id", {"unique": True, "sparse": True}),
+        ("payments_user_created", db.payments, [("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)], {}),
+        ("gem_wallets_user", db.gemWallets, "user_id", {"unique": True}),
+        ("gem_transactions_user_created", db.gemTransactions, [("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)], {}),
         ("usage_records_user_capability", db.usageRecords, [("user_id", pymongo.ASCENDING), ("capability", pymongo.ASCENDING)], {}),
         ("checkout_sessions_user_status", db.checkoutSessions, [("user_id", pymongo.ASCENDING), ("status", pymongo.ASCENDING)], {}),
-        ("checkout_sessions_subscription_id", db.checkoutSessions, "subscription_id", {"sparse": True}),
-        ("coupons_code_unique", db.coupons, "code", {"unique": True}),
-        ("course_purchases_user_course_unique", db.coursePurchases, [("user_id", pymongo.ASCENDING), ("course_id", pymongo.ASCENDING)], {"unique": True}),
-        ("gem_packages_id_unique", db.gemPackages, "package_id", {"unique": True}),
-        ("audit_logs_user_recent", db.auditLogs, [("user_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)], {}),
+        ("checkout_sessions_subscription", db.checkoutSessions, "subscription_id", {"sparse": True}),
+        ("coupons_code", db.coupons, "code", {"unique": True}),
+        ("course_purchases_user_course", db.coursePurchases, [("user_id", pymongo.ASCENDING), ("course_id", pymongo.ASCENDING)], {"unique": True}),
+        ("gem_packages_id", db.gemPackages, "package_id", {"unique": True}),
+        ("audit_logs_user_timestamp", db.auditLogs, [("user_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)], {}),
+        ("simulator_accounts_learner_mode_status", db.simulator_accounts, [("learner_id", pymongo.ASCENDING), ("mode", pymongo.ASCENDING), ("status", pymongo.ASCENDING)], {}),
+        ("simulator_sessions_learner_created", db.simulator_sessions, [("learner_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)], {}),
+        ("simulator_events_session_sequence", db.simulator_events, [("session_id", pymongo.ASCENDING), ("sequence", pymongo.ASCENDING)], {"unique": True}),
+        ("simulator_idempotency_session_key", db.simulator_idempotency, [("session_id", pymongo.ASCENDING), ("key", pymongo.ASCENDING)], {"unique": True}),
+        ("simulator_command_idempotency_scope_key", db.simulator_command_idempotency, [("session_id", pymongo.ASCENDING), ("scope", pymongo.ASCENDING), ("key", pymongo.ASCENDING)], {"unique": True}),
+        ("simulator_positions_session_instrument", db.simulator_positions, [("session_id", pymongo.ASCENDING), ("instrument_id", pymongo.ASCENDING)], {"unique": True}),
     ]
     for label, collection, keys, options in index_specs:
         try:

@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     # Database connection string
     database_url: str
     database_name: str = "chartcoach"
+    simulator_database_url: str = "mongodb://127.0.0.1:27019/?replicaSet=simulator-rs&directConnection=true"
+    simulator_database_name: str = "chartcoach_simulator"
+    simulator_redis_url: str = "redis://localhost:6380/0"
 
     # Secret key used to sign login tokens (JWT)
     jwt_secret_key: str
@@ -19,21 +22,13 @@ class Settings(BaseSettings):
     # Allowed frontend origin (for CORS)
     frontend_origin: str = "http://localhost:3000"
 
-    # Polygon.io API key for live financial market data & TradingView charts
-    polygon_api_key: str = "u2kEX_q5yC8uBLevrFS13IjJjVvpe3eL"
+    # Polygon.io API key for live financial market data & TradingView charts.
+    # Configure POLYGON_API_KEY through the backend environment; never commit it.
+    polygon_api_key: str = ""
 
-    # Whether the login cookie requires HTTPS
+    # Whether the login cookie requires HTTPS. Keep False for local dev over
+    # plain http://, but this MUST be True in any real deployment.
     cookie_secure: bool = False
-
-    # Razorpay Recurring Subscriptions & Webhooks (Phase 1)
-    razorpay_key_id: str = ""
-    razorpay_key_secret: str = ""
-    razorpay_webhook_secret: str = ""
-    razorpay_mock_mode: bool = False
-
-    @property
-    def is_razorpay_mock(self) -> bool:
-        return self.razorpay_mock_mode or not self.razorpay_key_id or self.razorpay_key_id.startswith("mock_")
 
     app_environment: str = "development"
     playback_provider: str = "mux"
@@ -50,6 +45,16 @@ class Settings(BaseSettings):
     watermark_secret: str | None = None
     watermark_startup_budget_seconds: int = 5
     watermark_renderer_enabled: bool = False
+
+    # Razorpay subscription and webhook settings.
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+    razorpay_mock_mode: bool = False
+
+    @property
+    def is_razorpay_mock(self) -> bool:
+        return self.razorpay_mock_mode or not self.razorpay_key_id or self.razorpay_key_id.startswith("mock_")
 
     # Mux signing is optional so unrelated APIs can start without video credentials.
     mux_signing_key_id: str | None = None
