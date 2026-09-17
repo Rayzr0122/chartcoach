@@ -31,6 +31,7 @@ export default function TradePage() {
     [journal, setJournal] = useState<Journal>({ plan: "", reflection: "" }),
     [review, setReview] = useState<Review>(),
     [query, setQuery] = useState(""),
+    [seekDraft, setSeekDraft] = useState<number | null>(null),
     [pending, setPending] = useState(false),
     [loading, setLoading] = useState(true),
     [error, setError] = useState<unknown>();
@@ -125,6 +126,33 @@ export default function TradePage() {
     } catch (e) {
       setError(e);
     } finally {
+      setPending(false);
+    }
+  }
+  async function seek(target: number) {
+    if (!session || pending || target === session.clock) return;
+    setPending(true);
+    setError(undefined);
+    try {
+      const next = await simulatorApi.control(
+        session.id,
+        "seek",
+        uid(),
+        target,
+      );
+      setSession(next);
+      setCandles(
+        await simulatorApi.candles(next.id, { limit: 700, timeframe }),
+      );
+      if (next.id !== session.id) {
+        setJournal(await simulatorApi.getJournal(next.id));
+        setReview(undefined);
+      }
+      history.replaceState(null, "", `/trade?session=${next.id}`);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSeekDraft(null);
       setPending(false);
     }
   }
@@ -395,7 +423,7 @@ export default function TradePage() {
               >
                 {session.state === "playing" ? "❚❚ Pause" : "▶ Play"}
               </button>
-              {[1, 5, 20].map((x) => (
+              {[5, 10, 20, 30].map((x) => (
                 <button
                   className={session.speed === x ? "on" : ""}
                   key={x}
@@ -408,13 +436,39 @@ export default function TradePage() {
                   {x}×
                 </button>
               ))}
-              <i>
-                <span
-                  style={{
-                    width: `${((session.clock || 0) / (session.total_bars || 1)) * 100}%`,
+              <div className="seek-control">
+                <input
+                  aria-label="Replay position"
+                  type="range"
+                  min={session.initial_clock ?? 0}
+                  max={session.total_bars ?? session.clock ?? 0}
+                  value={seekDraft ?? session.clock ?? 0}
+                  disabled={pending}
+                  onChange={(event) =>
+                    setSeekDraft(Number(event.currentTarget.value))
+                  }
+                  onPointerUp={(event) =>
+                    void seek(Number(event.currentTarget.value))
+                  }
+                  onKeyUp={(event) => {
+                    if (
+                      [
+                        "ArrowLeft",
+                        "ArrowRight",
+                        "Home",
+                        "End",
+                        "PageUp",
+                        "PageDown",
+                      ].includes(event.key)
+                    )
+                      void seek(Number(event.currentTarget.value));
                   }}
                 />
-              </i>
+                <output>
+                  {seekDraft ?? session.clock ?? 0} / {session.total_bars ?? 0}
+                </output>
+                <small>Backtracking creates an assisted copy</small>
+              </div>
             </div>
           )}
           <ActivityPanel

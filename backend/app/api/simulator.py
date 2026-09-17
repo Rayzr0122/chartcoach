@@ -37,7 +37,7 @@ class SessionCreate(BaseModel):
 
 
 class Control(BaseModel):
-    action: str = Field(pattern="^(play|pause|step|speed|heartbeat|fork|finish)$")
+    action: str = Field(pattern="^(play|pause|step|speed|heartbeat|seek|fork|finish)$")
     value: int | None = None
     controller_id: str | None = None
 
@@ -124,6 +124,9 @@ def _snapshot(state: dict) -> dict:
         "dataset_id": session["dataset_id"], "fx_dataset_id": session.get("fx_dataset_id"),
         "data_source": session["data_source"], "clock": session["clock"],
         "market_time": session.get("market_time"), "state": session["state"], "speed": session["speed"],
+        "initial_clock": session.get("initial_clock", min(300, session.get("total_bars", 0))),
+        "parent_session_id": session.get("parent_session_id"),
+        "forked_at_clock": session.get("forked_at_clock"),
         "assisted": session.get("assisted", False), "revision": session["revision"],
         "legacy_read_only": False, "data_status": session.get("data_status", "ready"),
         "coverage": session.get("coverage", {}), "total_bars": session.get("total_bars", 0),
@@ -256,9 +259,9 @@ async def create_session(payload: SessionCreate, idempotency_key: str = Header(.
         "id": f"sim_{uuid4().hex}", "learner_id": user.id, "account_id": account["id"],
         "mode": payload.mode, "instrument_id": payload.instrument_id, "dataset_id": dataset["id"],
         "fx_dataset_id": fx_dataset["id"] if fx_dataset else None, "data_source": dataset["source"],
-        "history_days": payload.history_days, "clock": initial_clock,
+        "history_days": payload.history_days, "clock": initial_clock, "initial_clock": initial_clock,
         "market_time": dataset["bars"][initial_clock - 1]["time"] if initial_clock else None,
-        "state": "paused", "speed": 1, "revision": 1, "coverage": dataset["coverage"],
+        "state": "paused", "speed": 5, "revision": 1, "coverage": dataset["coverage"],
         "total_bars": len(dataset["bars"]), "data_status": "ready", "created_at": _now(),
         "drill_id": payload.drill_id, "assisted": False,
     }
@@ -293,6 +296,65 @@ def _records(session_id: str, kind: str, user: User, repo):
     return _owned(repo, session_id, user)[kind]
 
 
+def _fork_replay(repo, state: dict, target: int, key: str, fingerprint: str) -> dict:
+    source = state["session"]
+    dataset = _dataset(source["dataset_id"])
+    initial_clock = source.get("initial_clock", min(300, len(dataset["bars"])))
+    if source["mode"] != "replay":
+        raise HTTPException(409, detail={"code": "SEEK_REPLAY_ONLY", "message": "Seeking is available only in historical replay."})
+    if target < initial_clock or target > len(dataset["bars"]):
+        raise HTTPException(422, detail={"code": "INVALID_SEEK_TARGET", "message": "Seek target is outside the replay range."})
+    fork_id, account_id, stamp = f"sim_{uuid4().hex}", f"acct_{uuid4().hex}", _now()
+    target_time = dataset["bars"][target - 1]["time"] if target else None
+    original_orders = {item["id"]: item for item in state["orders"]}
+    selected_fills = sorted((item for item in state["fills"] if item.get("time", 0) <= (target_time or 0)), key=lambda item: item.get("time", 0))
+    cash, realized = D(STARTING_EQUITY), Decimal("0")
+    positions: dict[str, dict] = {}
+    cloned_orders, cloned_fills, cloned_ledger = [], [], []
+    for fill in selected_fills:
+        original = original_orders.get(fill["order_id"])
+        if not original:
+            continue
+        order_id = f"{fork_id}:order:{original['id']}"
+        instrument = fill.get("instrument_id", source["instrument_id"])
+        quantity, price, fx_rate = D(fill["quantity"]), D(fill["price"]), D(fill.get("fx_rate", 1))
+        held = positions.get(instrument)
+        held_quantity = D(held["quantity"]) if held else Decimal("0")
+        if original["side"] == "buy":
+            average = D(held["average_price"]) if held else Decimal("0")
+            next_quantity = held_quantity + quantity
+            positions[instrument] = {"id": f"{fork_id}:position:{instrument}", "instrument_id": instrument, "quantity": format(next_quantity, "f"), "average_price": money((held_quantity * average + quantity * price) / next_quantity)}
+        else:
+            average = D(held["average_price"])
+            realized += (price - average) * quantity * fx_rate - D(fill.get("fee", 0)) - D(fill.get("conversion_cost", 0))
+            remaining = held_quantity - quantity
+            if remaining > 0:
+                positions[instrument] = {**held, "quantity": format(remaining, "f")}
+            else:
+                positions.pop(instrument, None)
+        ledger = next((item for item in state["ledger"] if item.get("order_id") == fill["order_id"] and item.get("time") == fill.get("time")), None)
+        if ledger:
+            cash += D(ledger["amount"])
+            cloned_ledger.append({**ledger, "id": f"{fork_id}:ledger:{len(cloned_ledger)}", "order_id": order_id})
+        cloned_orders.append({**original, "id": order_id, "session_id": fork_id, "parent_order_id": None, "oco_group": None, "status": "filled"})
+        cloned_fills.append({**fill, "id": f"{fork_id}:fill:{len(cloned_fills)}", "order_id": order_id})
+    account = {
+        "id": account_id, "learner_id": source["learner_id"], "mode": "replay", "status": "active",
+        "reporting_currency": "INR", "cash": money(cash), "equity": money(cash), "buying_power": money(cash),
+        "reserved": "0.00", "realized_pnl": money(realized), "unrealized_pnl": "0.00", "revision": 1, "created_at": stamp,
+    }
+    bar = dataset["bars"][target - 1]
+    fx = _fx_bar(source.get("fx_dataset_id"), bar["time"])
+    marked = process_bar(account, list(positions.values()), [], bar, target, instrument_id=source["instrument_id"], fx_rate=D(fx["close"]) if fx else Decimal("1"))
+    session = {
+        **source, "id": fork_id, "account_id": account_id, "clock": target, "market_time": bar["time"],
+        "state": "paused", "assisted": True, "parent_session_id": source["id"], "forked_at_clock": target,
+        "revision": 1, "created_at": stamp, "controller_id": None, "controller_heartbeat_at": None,
+    }
+    records = {"orders": cloned_orders, "fills": cloned_fills, "ledger": cloned_ledger, "positions": marked.positions}
+    return repo.create_fork_bundle(source["id"], key, fingerprint, marked.account, session, records)
+
+
 @router.get("/sessions/{session_id}/orders")
 def orders(session_id: str, user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
     return _records(session_id, "orders", user, repo)
@@ -318,6 +380,16 @@ def control(session_id: str, payload: Control, idempotency_key: str = Header(...
     _require_paid(user)
     state = _owned(repo, session_id, user)
     stamp = _now()
+    control_payload = payload.model_dump(mode="json")
+    if payload.action == "seek":
+        if payload.value is None:
+            raise HTTPException(422, detail={"code": "SEEK_TARGET_REQUIRED"})
+        target = payload.value
+        if target < state["session"]["clock"]:
+            try:
+                return _snapshot(_fork_replay(repo, state, target, idempotency_key, _fingerprint("seek", control_payload)))
+            except IdempotencyConflict:
+                raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT"}) from None
 
     def operation(current):
         session = {**current["session"]}
@@ -328,7 +400,16 @@ def control(session_id: str, payload: Control, idempotency_key: str = Header(...
         elif payload.action in {"play", "pause"}:
             session["state"] = "playing" if payload.action == "play" else "paused"
         elif payload.action == "speed":
-            session["speed"] = payload.value if payload.value in {1, 5, 20} else 1
+            if payload.value not in {5, 10, 20, 30}:
+                raise HTTPException(422, detail={"code": "INVALID_REPLAY_SPEED"})
+            session["speed"] = payload.value
+        elif payload.action == "seek":
+            dataset = _dataset(session["dataset_id"])
+            if session["mode"] != "replay" or payload.value is None or payload.value > len(dataset["bars"]):
+                raise HTTPException(422, detail={"code": "INVALID_SEEK_TARGET"})
+            session, account, positions, orders, fills, ledger = advance_state(current, payload.value - session["clock"])
+            session["state"] = "paused"
+            changes.update(account=account, positions=positions, orders=orders, fills=fills, ledger=ledger)
         elif payload.action == "finish":
             session["state"] = "finished"
         elif payload.action == "heartbeat":
@@ -341,7 +422,7 @@ def control(session_id: str, payload: Control, idempotency_key: str = Header(...
         changes.update(session=session, events=[event])
         return _snapshot({**current, **changes}), changes
 
-    return _mutation(repo, state, idempotency_key, "control", payload.model_dump(mode="json"), operation)
+    return _mutation(repo, state, idempotency_key, "control", control_payload, operation)
 
 
 @router.post("/sessions/{session_id}/orders")

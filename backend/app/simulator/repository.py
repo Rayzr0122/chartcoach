@@ -52,6 +52,20 @@ class InMemorySimulatorRepository:
         self.creation_idempotency[token] = {"fingerprint": fingerprint, "session_id": session["id"]}
         return self.snapshot(session["id"])
 
+    def create_fork_bundle(self, source_session_id: str, key: str, fingerprint: str, account: dict, session: dict, records: dict) -> dict:
+        token = (source_session_id, f"fork:{key}")
+        prior = self.idempotency.get(token)
+        if prior:
+            if prior["fingerprint"] != fingerprint:
+                raise IdempotencyConflict()
+            return self.snapshot(prior["session_id"])
+        self.create_account(account)
+        self.create_session(session)
+        for name in ("orders", "positions", "fills", "ledger"):
+            self.records[(account["id"], name)] = copy.deepcopy(records.get(name, []))
+        self.idempotency[token] = {"fingerprint": fingerprint, "session_id": session["id"], "response": {"session_id": session["id"]}}
+        return self.snapshot(session["id"])
+
     def get_session(self, session_id: str) -> dict | None:
         value = self.sessions.get(session_id)
         return copy.deepcopy(value) if value else None
@@ -159,6 +173,25 @@ class MongoSimulatorRepository:
                 self.db.simulator_accounts.update_one({"id": account["id"]}, {"$setOnInsert": copy.deepcopy(account)}, upsert=True, session=mongo_session)
                 self.db.simulator_sessions.insert_one(copy.deepcopy(session), session=mongo_session)
                 self.db.simulator_session_idempotency.insert_one({"learner_id": learner_id, "key": key, "fingerprint": fingerprint, "session_id": session["id"]}, session=mongo_session)
+                return self.snapshot(session["id"], mongo_session)
+
+    def create_fork_bundle(self, source_session_id: str, key: str, fingerprint: str, account: dict, session: dict, records: dict) -> dict:
+        token = f"fork:{key}"
+        with self.db.client.start_session() as mongo_session:
+            with mongo_session.start_transaction():
+                prior = self.db.simulator_idempotency.find_one({"session_id": source_session_id, "key": token}, session=mongo_session)
+                if prior:
+                    if prior["fingerprint"] != fingerprint:
+                        raise IdempotencyConflict()
+                    return self.snapshot(prior["response"]["session_id"], mongo_session)
+                self.db.simulator_accounts.insert_one(copy.deepcopy(account), session=mongo_session)
+                self.db.simulator_sessions.insert_one(copy.deepcopy(session), session=mongo_session)
+                for name in ("orders", "positions", "fills", "ledger"):
+                    values = [{**value, "account_id": account["id"]} for value in records.get(name, [])]
+                    if values:
+                        self.db[f"simulator_{name}"].insert_many(values, session=mongo_session)
+                response = {"session_id": session["id"]}
+                self.db.simulator_idempotency.insert_one({"session_id": source_session_id, "key": token, "fingerprint": fingerprint, "response": response}, session=mongo_session)
                 return self.snapshot(session["id"], mongo_session)
 
     def get_session(self, session_id: str) -> dict | None:

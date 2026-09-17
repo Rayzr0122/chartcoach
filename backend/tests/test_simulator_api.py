@@ -64,6 +64,46 @@ def test_market_order_waits_for_next_bar_and_retry_is_idempotent():
     assert len([order for order in stepped["orders"] if order.get("parent_order_id")]) == 2
 
 
+def test_replay_supports_requested_speeds_and_forward_seek():
+    client, _, _ = client_and_repo()
+    dataset = fixture_dataset()
+    with patch.object(simulator, "load_dataset", new=AsyncMock(return_value=dataset)), patch.object(simulator, "get_dataset", return_value=dataset):
+        simulator._dataset.cache_clear()
+        session = client.post("/api/v1/simulator/sessions", json={"mode": "replay"}, headers={"Idempotency-Key": "session-speed"}).json()
+        assert session["speed"] == 5
+        for speed in (5, 10, 20, 30):
+            response = client.post(f"/api/v1/simulator/sessions/{session['id']}/controls", json={"action": "speed", "value": speed}, headers={"Idempotency-Key": f"speed-{speed}"})
+            assert response.status_code == 200
+            assert response.json()["speed"] == speed
+        sought = client.post(f"/api/v1/simulator/sessions/{session['id']}/controls", json={"action": "seek", "value": 325}, headers={"Idempotency-Key": "seek-forward"})
+    assert sought.status_code == 200
+    assert sought.json()["clock"] == 325
+    assert sought.json()["state"] == "paused"
+
+
+def test_backward_seek_creates_assisted_fork_and_preserves_original():
+    client, _, _ = client_and_repo()
+    dataset = fixture_dataset()
+    with patch.object(simulator, "load_dataset", new=AsyncMock(return_value=dataset)), patch.object(simulator, "get_dataset", return_value=dataset):
+        simulator._dataset.cache_clear()
+        session = client.post("/api/v1/simulator/sessions", json={"mode": "replay"}, headers={"Idempotency-Key": "session-fork"}).json()
+        client.post(f"/api/v1/simulator/sessions/{session['id']}/orders", json={"side": "buy", "order_type": "market", "quantity": "1", "stop_loss": "350", "take_profit": "500"}, headers={"Idempotency-Key": "fork-order"})
+        client.post(f"/api/v1/simulator/sessions/{session['id']}/controls", json={"action": "seek", "value": 320}, headers={"Idempotency-Key": "seek-ahead"})
+        fork = client.post(f"/api/v1/simulator/sessions/{session['id']}/controls", json={"action": "seek", "value": 310}, headers={"Idempotency-Key": "seek-back"})
+        retry = client.post(f"/api/v1/simulator/sessions/{session['id']}/controls", json={"action": "seek", "value": 310}, headers={"Idempotency-Key": "seek-back"})
+        original = client.get(f"/api/v1/simulator/sessions/{session['id']}").json()
+    assert fork.status_code == 200
+    assert fork.json()["id"] != session["id"]
+    assert retry.json()["id"] == fork.json()["id"]
+    assert fork.json()["parent_session_id"] == session["id"]
+    assert fork.json()["assisted"] is True
+    assert fork.json()["clock"] == 310
+    assert len(fork.json()["fills"]) == 1
+    assert len(fork.json()["positions"]) == 1
+    assert [order["status"] for order in fork.json()["orders"]] == ["filled"]
+    assert original["clock"] == 320
+
+
 def test_idempotency_key_conflicts_for_different_payload():
     client, _, _ = client_and_repo()
     dataset = fixture_dataset()

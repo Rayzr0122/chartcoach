@@ -383,17 +383,34 @@
   color: #fff;
   border-color: #5a62e3;
 }
-.controls i {
-  height: 4px;
-  background: #26303e;
+.seek-control {
   flex: 1;
   margin-left: 8px;
-  border-radius: 3px;
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto;
+  align-items: center;
+  column-gap: 9px;
 }
-.controls i span {
-  display: block;
-  height: 100%;
-  background: var(--a);
+.seek-control input[type="range"] {
+  width: 100%;
+  accent-color: var(--a);
+  cursor: pointer;
+}
+.seek-control input[type="range"]:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.seek-control output {
+  min-width: 72px;
+  color: #d6dce7;
+  font: 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-align: right;
+}
+.seek-control small {
+  grid-column: 1 / -1;
+  color: #707f92;
+  font-size: 9px;
+  line-height: 1;
 }
 .ticket {
   padding: 12px 14px;
@@ -595,6 +612,19 @@
   }
   .work {
     grid-template-rows: 41px 48vh auto 300px;
+  }
+  .controls {
+    height: auto;
+    min-height: 86px;
+    flex-wrap: wrap;
+    padding-block: 7px;
+  }
+  .controls button {
+    padding: 6px 8px;
+  }
+  .seek-control {
+    flex-basis: 100%;
+    margin-left: 0;
   }
   .metrics {
     grid-template-columns: repeat(3, 1fr);
