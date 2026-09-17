@@ -61,11 +61,13 @@ export default function TradePage() {
     [timeframe],
   );
   useEffect(() => {
-    Promise.all([simulatorApi.instruments(), simulatorApi.bootstrap()])
-      .then(async ([list]) => {
-        setInstruments(list);
+    Promise.allSettled([simulatorApi.instruments(), simulatorApi.bootstrap()])
+      .then(async ([catalog, access]) => {
+        if (catalog.status === "fulfilled") setInstruments(catalog.value);
+        else setError(catalog.reason);
+        if (access.status === "rejected") setError(access.reason);
         const id = new URLSearchParams(location.search).get("session");
-        if (id) {
+        if (id && access.status === "fulfilled") {
           const s = await refresh(id);
           setJournal(await simulatorApi.getJournal(s.id));
         }
