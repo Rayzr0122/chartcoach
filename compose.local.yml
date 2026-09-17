@@ -1,0 +1,35 @@
+name: chartcoach-local
+
+services:
+  mongo:
+    image: mongo:8.0.14
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${CHARTCOACH_MONGO_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${CHARTCOACH_MONGO_PASSWORD}
+    ports:
+      - "127.0.0.1:27018:27017"
+    volumes:
+      - chartcoach-mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --host 127.0.0.1 --port 27017
+          --username "$${MONGO_INITDB_ROOT_USERNAME}"
+          --password "$${MONGO_INITDB_ROOT_PASSWORD}"
+          --authenticationDatabase admin
+          --eval "db.adminCommand('ping').ok" | grep 1
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+
+volumes:
+  chartcoach-mongo-data:
+    name: chartcoach-local-mongo-data
