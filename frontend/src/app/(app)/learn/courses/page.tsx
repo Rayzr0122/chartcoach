@@ -23,7 +23,7 @@ import { createCourseCheckout, verifyCoursePayment } from "@/lib/api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-export const COURSE_PRICES: Record<string, number> = {
+const COURSE_PRICES: Record<string, number> = {
   "trading-101": 1,
   "course-1": 1,
   "chart-reading-101": 2,

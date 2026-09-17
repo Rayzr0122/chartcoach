@@ -1,288 +1,501 @@
 "use client";
-
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { MarketChart } from "@/components/simulator/MarketChart";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityPanel } from "@/components/simulator/ActivityPanel";
+import { MarketChart, type Overlay } from "@/components/simulator/MarketChart";
+import { OrderTicket } from "@/components/simulator/OrderTicket";
 import {
   formatInr,
+  formatQuote,
   sessionLabel,
   simulatorApi,
   simulatorErrorPresentation,
+  type Candle,
   type Instrument,
+  type Journal,
+  type Review,
   type SimulatorSession,
+  type Timeframe,
 } from "@/lib/simulator";
-
-type Candle = { time: number | string; open: string; high: string; low: string; close: string; volume: string };
-
-function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
-  const presentation = simulatorErrorPresentation(error);
-  const action = presentation.actionHref ? (
-    <Link href={presentation.actionHref} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-100">
-      {presentation.actionLabel}
-    </Link>
-  ) : presentation.actionLabel && onRetry ? (
-    <button type="button" onClick={onRetry} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-100">
-      {presentation.actionLabel}
-    </button>
-  ) : null;
-
+import "./terminal.css";
+const uid = () => crypto.randomUUID();
+export default function TradePage() {
+  const [instruments, setInstruments] = useState<Instrument[]>([]),
+    [selected, setSelected] = useState("NASDAQ:AAPL"),
+    [mode, setMode] = useState<"replay" | "delayed">("replay"),
+    [source, setSource] = useState<"synthetic-test" | "polygon">("polygon"),
+    [days, setDays] = useState<7 | 30 | 90 | 365>(30),
+    [session, setSession] = useState<SimulatorSession | null>(null),
+    [candles, setCandles] = useState<Candle[]>([]),
+    [timeframe, setTimeframe] = useState<Timeframe>("1m"),
+    [overlays, setOverlays] = useState<Overlay[]>(["ema"]),
+    [journal, setJournal] = useState<Journal>({ plan: "", reflection: "" }),
+    [review, setReview] = useState<Review>(),
+    [query, setQuery] = useState(""),
+    [pending, setPending] = useState(false),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState<unknown>();
+  const controller = useRef(uid()),
+    instrument = useMemo(
+      () =>
+        instruments.find((x) => x.id === (session?.instrument_id || selected)),
+      [instruments, selected, session],
+    ),
+    filtered = useMemo(
+      () =>
+        instruments.filter((x) =>
+          `${x.symbol} ${x.venue}`.toLowerCase().includes(query.toLowerCase()),
+        ),
+      [instruments, query],
+    ),
+    last = candles.at(-1);
+  const refresh = useCallback(
+    async (id: string) => {
+      const [s, c] = await Promise.all([
+        simulatorApi.getSession(id),
+        simulatorApi.candles(id, { limit: 700, timeframe }),
+      ]);
+      setSession(s);
+      setCandles(c);
+      return s;
+    },
+    [timeframe],
+  );
+  useEffect(() => {
+    Promise.all([simulatorApi.instruments(), simulatorApi.bootstrap()])
+      .then(async ([list]) => {
+        setInstruments(list);
+        const id = new URLSearchParams(location.search).get("session");
+        if (id) {
+          const s = await refresh(id);
+          setJournal(await simulatorApi.getJournal(s.id));
+        }
+      })
+      .catch(setError)
+      .finally(() => setLoading(false));
+  }, [refresh]);
+  useEffect(() => {
+    if (!session) return;
+    const timer = setInterval(() => refresh(session.id).catch(setError), 1800);
+    return () => clearInterval(timer);
+  }, [session?.id, refresh]);
+  useEffect(() => {
+    if (!session || session.state !== "playing" || session.mode !== "replay")
+      return;
+    const timer = setInterval(
+      () =>
+        simulatorApi
+          .control(
+            session.id,
+            "heartbeat",
+            uid(),
+            undefined,
+            controller.current,
+          )
+          .catch(setError),
+      5000,
+    );
+    return () => clearInterval(timer);
+  }, [session?.id, session?.state, session?.mode]);
+  async function start() {
+    setPending(true);
+    setError(undefined);
+    try {
+      const s = await simulatorApi.createSession(
+        { mode, instrument_id: selected, source, history_days: days },
+        uid(),
+      );
+      setSession(s);
+      setCandles(await simulatorApi.candles(s.id, { limit: 700, timeframe }));
+      history.replaceState(null, "", `/trade?session=${s.id}`);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setPending(false);
+    }
+  }
+  async function mutate(job: () => Promise<unknown>) {
+    if (!session || pending) return;
+    setPending(true);
+    setError(undefined);
+    try {
+      await job();
+      await refresh(session.id);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setPending(false);
+    }
+  }
+  const older = useCallback(async () => {
+    if (!session || !candles.length) return;
+    try {
+      const c = await simulatorApi.candles(session.id, {
+        before: candles[0].time,
+        limit: 700,
+        timeframe,
+      });
+      if (c.length) setCandles((v) => [...c, ...v]);
+    } catch (e) {
+      setError(e);
+    }
+  }, [session, candles, timeframe]);
+  if (loading)
+    return (
+      <main className="loading">
+        <b>CC</b>
+        <p>Connecting to the practice exchange…</p>
+      </main>
+    );
+  if (!session)
+    return (
+      <main className="launch">
+        <header>
+          <b>
+            CHARTCOACH <span>/ Practice Exchange</span>
+          </b>
+          <small>● Simulator online</small>
+        </header>
+        <div className="launch-grid">
+          <section>
+            <label>SERVER-AUTHORITATIVE PAPER TRADING</label>
+            <h1>
+              Train the decision.
+              <br />
+              <em>Not the outcome.</em>
+            </h1>
+            <p>
+              Replay up to one year of minute-level history or use a persistent
+              15-minute delayed market clock. Every fill, cost and risk decision
+              is recorded.
+            </p>
+            <div className="stats">
+              <b>
+                ₹10L<small>virtual capital</small>
+              </b>
+              <b>
+                40<small>instruments</small>
+              </b>
+              <b>
+                1m<small>execution precision</small>
+              </b>
+            </div>
+          </section>
+          <section className="builder">
+            <div className="modes">
+              <button
+                className={mode === "replay" ? "on" : ""}
+                onClick={() => setMode("replay")}
+              >
+                Historical replay<small>Control the clock</small>
+              </button>
+              <button
+                className={mode === "delayed" ? "on" : ""}
+                onClick={() => setMode("delayed")}
+              >
+                Delayed paper<small>Persistent account</small>
+              </button>
+            </div>
+            <label>
+              Instrument
+              <select
+                value={selected}
+                onChange={(e) => {
+                  setSelected(e.target.value);
+                  setSource(
+                    e.target.value.startsWith("NASDAQ:")
+                      ? "polygon"
+                      : "synthetic-test",
+                  );
+                }}
+              >
+                {instruments.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.symbol} · {x.venue} · {x.asset_class}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="row">
+              <label>
+                History
+                <select
+                  value={days}
+                  onChange={(e) =>
+                    setDays(Number(e.target.value) as typeof days)
+                  }
+                >
+                  {[7, 30, 90, 365].map((x) => (
+                    <option key={x} value={x}>
+                      {x === 365 ? "1 year" : `${x} days`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Data source
+                <select
+                  value={source}
+                  onChange={(e) => setSource(e.target.value as typeof source)}
+                >
+                  <option value="synthetic-test">Deterministic test</option>
+                  {selected.startsWith("NASDAQ:") && (
+                    <option value="polygon">Polygon market data</option>
+                  )}
+                </select>
+              </label>
+            </div>
+            <p className="note">
+              ●{" "}
+              {source === "polygon"
+                ? `Polygon minute bars · ${mode === "delayed" ? "15-minute delay" : "historical replay"}`
+                : "Labeled educational fixture data"}
+            </p>
+            <button className="open" disabled={pending} onClick={start}>
+              {pending ? "Preparing market data…" : "Open trading workspace →"}
+            </button>
+          </section>
+        </div>
+        {Boolean(error) && <Toast error={error} close={() => setError(undefined)} />}
+      </main>
+    );
+  const date = session.market_time
+    ? new Date(session.market_time * 1000).toLocaleString("en-IN", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      })
+    : "Waiting for market";
   return (
-    <div role="alert" className="flex flex-col gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-rose-950 sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <p className="text-sm font-semibold">{presentation.title}</p>
-        <p className="mt-1 text-sm leading-6 text-rose-800">{presentation.message}</p>
+    <main className="terminal">
+      <header className="top">
+        <b className="logo">CC</b>
+        <div>
+          <strong>{instrument?.symbol}</strong>
+          <small>
+            {instrument?.venue} · {instrument?.asset_class}
+          </small>
+        </div>
+        <div>
+          <strong>
+            {last
+              ? formatQuote(last.close, instrument?.quote_currency || "USD")
+              : "—"}
+          </strong>
+          <small>{date}</small>
+        </div>
+        <span className="feed">
+          ●{" "}
+          {sessionLabel(session.mode, session.data_source || "synthetic-test")}
+        </span>
+        <button
+          onClick={() => {
+            setSession(null);
+            history.replaceState(null, "", "/trade");
+          }}
+        >
+          Exit
+        </button>
+      </header>
+      <div className="metrics">
+        <Metric n="Equity" v={session.account.equity} />
+        <Metric
+          n="Available"
+          v={session.account.buying_power || session.account.cash}
+        />
+        <Metric n="Reserved" v={session.account.reserved || "0"} />
+        <Metric n="Realized P&L" v={session.account.realized_pnl || "0"} />
+        <Metric n="Unrealized P&L" v={session.account.unrealized_pnl || "0"} />
       </div>
-      {action}
+      <div className="body">
+        <aside className="watch">
+          <h3>
+            WATCHLIST <small>{filtered.length}</small>
+          </h3>
+          <input
+            placeholder="Search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {filtered.map((x) => (
+            <button
+              key={x.id}
+              className={x.id === session.instrument_id ? "on" : ""}
+              disabled={x.id !== session.instrument_id}
+            >
+              <b>
+                {x.symbol}
+                <small>{x.venue}</small>
+              </b>
+              <span>{x.quote_currency}</span>
+            </button>
+          ))}
+        </aside>
+        <section className="work">
+          <nav className="tools">
+            <div>
+              {(["1m", "5m", "15m", "1h", "1d"] as Timeframe[]).map((x) => (
+                <button
+                  className={x === timeframe ? "on" : ""}
+                  key={x}
+                  onClick={() => setTimeframe(x)}
+                >
+                  {x}
+                </button>
+              ))}
+            </div>
+            <div>
+              {(["sma", "ema", "vwap"] as Overlay[]).map((x) => (
+                <button
+                  className={overlays.includes(x) ? "on" : ""}
+                  key={x}
+                  onClick={() =>
+                    setOverlays((v) =>
+                      v.includes(x) ? v.filter((y) => y !== x) : [...v, x],
+                    )
+                  }
+                >
+                  {x.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            <small>{candles.length} bars</small>
+          </nav>
+          <div className="chart">
+            {candles.length ? (
+              <MarketChart
+                candles={candles}
+                overlays={overlays}
+                onLoadOlder={older}
+              />
+            ) : (
+              <p>No visible data</p>
+            )}
+          </div>
+          {session.mode === "replay" && (
+            <div className="controls">
+              <button
+                onClick={() =>
+                  mutate(() => simulatorApi.control(session.id, "step", uid()))
+                }
+              >
+                │▶ Step
+              </button>
+              <button
+                className="play"
+                onClick={() =>
+                  mutate(() =>
+                    simulatorApi.control(
+                      session.id,
+                      session.state === "playing" ? "pause" : "play",
+                      uid(),
+                    ),
+                  )
+                }
+              >
+                {session.state === "playing" ? "❚❚ Pause" : "▶ Play"}
+              </button>
+              {[1, 5, 20].map((x) => (
+                <button
+                  className={session.speed === x ? "on" : ""}
+                  key={x}
+                  onClick={() =>
+                    mutate(() =>
+                      simulatorApi.control(session.id, "speed", uid(), x),
+                    )
+                  }
+                >
+                  {x}×
+                </button>
+              ))}
+              <i>
+                <span
+                  style={{
+                    width: `${((session.clock || 0) / (session.total_bars || 1)) * 100}%`,
+                  }}
+                />
+              </i>
+            </div>
+          )}
+          <ActivityPanel
+            session={session}
+            instrument={instrument}
+            journal={journal}
+            review={review}
+            onCancel={(id) =>
+              mutate(() => simulatorApi.cancelOrder(session.id, id, uid()))
+            }
+            onAmend={(id, price) =>
+              mutate(() =>
+                simulatorApi.amendOrder(
+                  session.id,
+                  id,
+                  { limit_price: price },
+                  uid(),
+                ),
+              )
+            }
+            onClose={(id, q) =>
+              mutate(() => simulatorApi.closePosition(session.id, id, q, uid()))
+            }
+            onSaveJournal={(j) =>
+              mutate(async () => {
+                await simulatorApi.journal(
+                  session.id,
+                  j.plan,
+                  j.reflection,
+                  uid(),
+                );
+                setJournal(j);
+              })
+            }
+            onReview={() =>
+              simulatorApi.review(session.id).then(setReview).catch(setError)
+            }
+          />
+        </section>
+        <aside className="rail">
+          <h3>
+            ORDER ENTRY <small>{instrument?.symbol}</small>
+          </h3>
+          <OrderTicket
+            instrumentId={session.instrument_id}
+            quoteCurrency={instrument?.quote_currency || "USD"}
+            pending={pending}
+            onSubmit={(p) =>
+              mutate(() => simulatorApi.order(session.id, p, uid()))
+            }
+          />
+          <div className="risk">
+            <b>Educational cash preset</b>
+            <p>
+              Long-only · 5 bps commission/spread · 2 bps slippage · 5 bps FX
+            </p>
+          </div>
+        </aside>
+      </div>
+      {Boolean(error) && <Toast error={error} close={() => setError(undefined)} />}
+    </main>
+  );
+}
+function Metric({ n, v }: { n: string; v: string }) {
+  const x = Number(v);
+  return (
+    <div>
+      <span>{n}</span>
+      <b className={x < 0 ? "neg" : n.includes("P&L") && x > 0 ? "pos" : ""}>
+        {formatInr(v)}
+      </b>
     </div>
   );
 }
-
-function sourceLabel(source: string | undefined) {
-  return sessionLabel("replay", source || "synthetic-test").replace("Replay · ", "");
-}
-
-export default function TradePage() {
-  const [instruments, setInstruments] = useState<Instrument[]>([]);
-  const [selected, setSelected] = useState("NASDAQ:AAPL");
-  const [session, setSession] = useState<SimulatorSession | null>(null);
-  const [candles, setCandles] = useState<Candle[]>([]);
-  const [mode, setMode] = useState<"replay" | "delayed">("replay");
-  const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [quantity, setQuantity] = useState("1");
-  const [setupError, setSetupError] = useState<unknown>(null);
-  const [workspaceError, setWorkspaceError] = useState<unknown>(null);
-  const [loading, setLoading] = useState(true);
-  const [accessReady, setAccessReady] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [updating, setUpdating] = useState(false);
-  const [retryToken, setRetryToken] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setSetupError(null);
-    setAccessReady(false);
-
-    // These requests have independent failure modes. A failed entitlement
-    // check must not discard the catalog, and a catalog outage must not be
-    // presented as an authentication failure.
-    Promise.allSettled([simulatorApi.instruments(), simulatorApi.bootstrap()]).then(([catalogResult, bootstrapResult]) => {
-      if (cancelled) return;
-
-      if (catalogResult.status === "fulfilled") {
-        setInstruments(catalogResult.value);
-        setSelected((current) => catalogResult.value.some((item) => item.id === current) ? current : catalogResult.value[0]?.id || "");
-      }
-
-      if (bootstrapResult.status === "fulfilled") {
-        setAccessReady(true);
-        if (catalogResult.status === "rejected") setSetupError(catalogResult.reason);
-      } else {
-        setSetupError(bootstrapResult.reason);
-      }
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-
-    return () => { cancelled = true; };
-  }, [retryToken]);
-
-  const instrument = useMemo(() => instruments.find((item) => item.id === selected), [instruments, selected]);
-  const selectedSource = mode === "delayed" ? instrument?.delayed_source : instrument?.replay_source;
-  const selectedSourceLabel = sourceLabel(selectedSource || instrument?.source);
-  const polygonSupported = mode === "delayed" && Boolean(instrument?.polygon_supported);
-
-  async function loadSession(next: Promise<SimulatorSession>) {
-    setUpdating(true);
-    setWorkspaceError(null);
-    try {
-      const value = await next;
-      setSession(value);
-      try {
-        setCandles(await simulatorApi.candles(value.id));
-      } catch (error) {
-        setWorkspaceError(error);
-      }
-    } catch (error) {
-      setWorkspaceError(error);
-    } finally {
-      setUpdating(false);
-    }
-  }
-
-  async function start() {
-    if (!accessReady || !selected || starting) return;
-    setStarting(true);
-    setSetupError(null);
-    try {
-      const value = await simulatorApi.createSession(mode, selected);
-      setSession(value);
-      try {
-        setCandles(await simulatorApi.candles(value.id));
-      } catch (error) {
-        setWorkspaceError(error);
-      }
-    } catch (error) {
-      setSetupError(error);
-    } finally {
-      setStarting(false);
-    }
-  }
-
-  async function placeOrder() {
-    if (!session || updating) return;
-    setUpdating(true);
-    setWorkspaceError(null);
-    try {
-      await simulatorApi.order(session.id, { side, order_type: "market", quantity });
-      const value = await simulatorApi.getSession(session.id);
-      setSession(value);
-      setCandles(await simulatorApi.candles(value.id));
-    } catch (error) {
-      setWorkspaceError(error);
-    } finally {
-      setUpdating(false);
-    }
-  }
-
-  if (loading) {
-    return <main className="grid min-h-screen place-items-center bg-[#f5f7fb] text-sm text-slate-500">Checking practice service…</main>;
-  }
-
-  if (!session) {
-    return (
-      <main className="min-h-screen bg-[#f5f7fb] px-5 py-8 text-slate-950 sm:px-10 sm:py-12">
-        <div className="mx-auto max-w-6xl">
-          <header className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[.24em] text-indigo-600">ChartCoach / Trade</p>
-              <p className="mt-2 text-xs font-medium text-slate-500">Server-owned practice environment</p>
-            </div>
-            <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${accessReady ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
-              {accessReady ? "Service ready" : "Account verification needed"}
-            </span>
-          </header>
-
-          <section className="mt-12 max-w-3xl">
-            <h1 className="text-4xl font-semibold tracking-[-.04em] text-slate-950 sm:text-6xl">Practice trading with clear market provenance.</h1>
-            <p className="mt-5 max-w-2xl text-base leading-7 text-slate-600 sm:text-lg">Replay deterministic test data or use a persistent paper account with a labeled 15-minute delayed feed.</p>
-          </section>
-
-          <section className="mt-12 grid gap-5 lg:grid-cols-[.85fr_1.15fr]">
-            <div className="relative overflow-hidden rounded-3xl bg-slate-950 p-7 text-white shadow-xl sm:p-9">
-              <div className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-indigo-500/20 blur-3xl" />
-              <p className="relative text-sm font-medium text-indigo-200">Virtual equity</p>
-              <p className="relative mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">₹10,00,000</p>
-              <div className="relative mt-16 border-t border-white/10 pt-5">
-                <p className="text-sm font-medium text-slate-300">What is assessed</p>
-                <p className="mt-2 text-sm leading-6 text-slate-400">Risk sizing, plan adherence, and execution discipline. P&amp;L is shown separately.</p>
-              </div>
-            </div>
-
-            <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200 sm:p-8">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-semibold tracking-tight">Set up a session</h2>
-                  <p className="mt-1 text-sm text-slate-500">Choose the clock and the data source before you start.</p>
-                </div>
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">INR reporting</span>
-              </div>
-
-              <div className="mt-7 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1" role="group" aria-label="Practice mode">
-                <button type="button" aria-pressed={mode === "replay"} onClick={() => setMode("replay")} className={`rounded-lg px-3 py-3 text-sm font-semibold transition ${mode === "replay" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>Historical replay</button>
-                <button type="button" aria-pressed={mode === "delayed"} onClick={() => setMode("delayed")} className={`rounded-lg px-3 py-3 text-sm font-semibold transition ${mode === "delayed" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>Delayed paper</button>
-              </div>
-
-              <label className="mt-7 block text-sm font-semibold text-slate-800" htmlFor="trade-instrument">Instrument</label>
-              <select id="trade-instrument" value={selected} onChange={(event) => setSelected(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-950 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100" disabled={!instruments.length}>
-                {instruments.map((item) => {
-                  const source = mode === "delayed" ? item.delayed_source : item.replay_source || item.source;
-                  return <option key={item.id} value={item.id}>{item.symbol} · {item.venue} · {sourceLabel(source)}</option>;
-                })}
-              </select>
-
-              <div className="mt-3 flex items-center justify-between gap-3 text-xs">
-                <span className="text-slate-500">Selected feed</span>
-                <span className={`font-semibold ${polygonSupported ? "text-emerald-700" : "text-slate-700"}`}>{selectedSourceLabel}</span>
-              </div>
-              <p className="mt-3 text-xs leading-5 text-slate-500">
-                {mode === "replay" ? "One-minute synthetic bars with deterministic replay controls." : polygonSupported ? "Polygon quotes and candles are used with the server-side delayed clock." : "This instrument uses labeled synthetic test data in delayed mode; Polygon delayed quotes are currently available for supported US stocks."}
-              </p>
-
-              <button type="button" onClick={start} disabled={!accessReady || !selected || starting} className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3.5 text-sm font-semibold text-white transition hover:bg-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:bg-slate-300">
-                {starting && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />}
-                {starting ? "Opening session…" : "Start practice"}
-              </button>
-              {!accessReady && !setupError && <p className="mt-3 text-center text-xs text-slate-500">Verify your account to enable practice.</p>}
-            </div>
-          </section>
-
-          {setupError ? <div className="mt-5"><ErrorNotice error={setupError} onRetry={() => setRetryToken((value) => value + 1)} /></div> : null}
-        </div>
-      </main>
-    );
-  }
-
-  const last = candles.at(-1);
-  const label = sessionLabel(session.mode, session.data_source || "synthetic-test");
-
+function Toast({ error, close }: { error: unknown; close: () => void }) {
+  const e = simulatorErrorPresentation(error);
   return (
-    <main className="min-h-screen bg-[#0b1120] text-slate-100">
-      <header className="border-b border-white/10 bg-[#111827] px-4 py-3 sm:px-8">
-        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[.2em] text-indigo-300">{label}</p>
-            <h1 className="mt-1 text-lg font-semibold">{session.instrument_id}</h1>
-          </div>
-          <div className="flex items-center gap-3 text-sm">
-            <span className="hidden rounded-lg bg-white/5 px-3 py-2 text-slate-400 sm:inline">{session.state}</span>
-            <span className="rounded-lg bg-white/5 px-3 py-2">Equity <b>{formatInr(session.account.equity)}</b></span>
-          </div>
-        </div>
-      </header>
-
-      <div className="mx-auto grid max-w-[1500px] gap-4 p-4 sm:p-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <section className="rounded-2xl bg-[#111827] p-4 ring-1 ring-white/5 sm:p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="font-medium">Price action</h2>
-              <p className="mt-1 text-xs text-slate-500">{last ? `Last ${last.close} · ${candles.length} visible bars` : "No market data loaded"}</p>
-            </div>
-            <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-slate-400">1 minute · {session.data_source || "synthetic-test"}</span>
-          </div>
-          <div className="mt-5 h-[420px] overflow-hidden rounded-xl bg-[#0b1120]">
-            {candles.length ? <MarketChart candles={candles} /> : <div className="grid h-full place-items-center text-sm text-slate-500">Waiting for visible market data…</div>}
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button type="button" disabled={updating} onClick={() => loadSession(simulatorApi.control(session.id, "step"))} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium disabled:opacity-50">Step one minute</button>
-            <button type="button" disabled={updating} onClick={() => loadSession(simulatorApi.control(session.id, session.state === "playing" ? "pause" : "play"))} className="rounded-lg bg-white/10 px-4 py-2 text-sm disabled:opacity-50">{session.state === "playing" ? "Pause" : "Play"}</button>
-            {[1, 5, 20].map((speed) => <button type="button" disabled={updating} key={speed} onClick={() => loadSession(simulatorApi.control(session.id, "speed", speed))} className="rounded-lg bg-white/5 px-3 py-2 text-xs disabled:opacity-50">{speed}×</button>)}
-          </div>
-        </section>
-
-        <aside className="space-y-4">
-          <section className="rounded-2xl bg-white p-5 text-slate-950 shadow-xl">
-            <div className="flex justify-between gap-3"><h2 className="font-semibold">Order ticket</h2><span className="text-xs text-slate-400">Virtual funds</span></div>
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <button type="button" aria-pressed={side === "buy"} onClick={() => setSide("buy")} className={`rounded-lg py-2.5 font-semibold ${side === "buy" ? "bg-emerald-500 text-white" : "bg-slate-100 text-slate-500"}`}>Buy</button>
-              <button type="button" aria-pressed={side === "sell"} onClick={() => setSide("sell")} className={`rounded-lg py-2.5 font-semibold ${side === "sell" ? "bg-rose-500 text-white" : "bg-slate-100 text-slate-500"}`}>Sell</button>
-            </div>
-            <label className="mt-4 block text-xs font-medium text-slate-500" htmlFor="trade-quantity">Quantity</label>
-            <input id="trade-quantity" value={quantity} onChange={(event) => setQuantity(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 p-3" inputMode="decimal" />
-            <button type="button" disabled={updating || !candles.length} onClick={placeOrder} className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-slate-950 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300">
-              {updating && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />}
-              Place {side} order
-            </button>
-          </section>
-
-          <section className="rounded-2xl bg-[#111827] p-5">
-            <h2 className="font-medium">Orders &amp; fills</h2>
-            {session.orders.length ? session.orders.map((order) => <div key={order.id} className="mt-3 flex justify-between border-b border-white/5 pb-3 text-sm"><span>{order.side} {order.quantity}</span><span className="text-slate-400">{order.price} · {order.status}</span></div>) : <p className="mt-3 text-sm text-slate-500">Your executions will appear here.</p>}
-          </section>
-        </aside>
+    <div className="toast" role="alert">
+      <div>
+        <b>{e.title}</b>
+        <p>{e.message}</p>
       </div>
-
-      {workspaceError ? <div className="fixed bottom-5 left-1/2 z-10 w-[min(92vw,560px)] -translate-x-1/2"><ErrorNotice error={workspaceError} onRetry={() => loadSession(simulatorApi.getSession(session.id))} /></div> : null}
-    </main>
+      <button onClick={close}>×</button>
+    </div>
   );
 }

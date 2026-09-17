@@ -1,39 +1,45 @@
-"""Server-owned practice simulator routes for the /trade testing release."""
+"""Server-authoritative practice simulator API."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
+from functools import lru_cache
 from uuid import uuid4
 
-import asyncio
-from fastapi import APIRouter, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
-from pymongo.database import Database
 
 from app.api.deps import get_current_user
-from app.database import get_db
-from app.database import db as app_db
 from app.core.security import AUTH_COOKIE_NAME, decode_access_token
+from app.database import db as application_db
 from app.models.user import User
-from app.domain.execution import OrderCommand, Policy, Quote, Side, OrderType, decide_fill
-from app.services.polygon_service import polygon_service
+from app.services.simulator_data import DatasetError, get_dataset, load_dataset
+from app.simulator.database import get_simulator_db
+from app.simulator.engine import D, money, process_bar
+from app.simulator.repository import IdempotencyConflict, MongoSimulatorRepository
+
 
 router = APIRouter(prefix="/api/v1/simulator", tags=["simulator"])
 admin_router = APIRouter(prefix="/api/v1/admin/simulator", tags=["simulator-admin"])
-STARTING_EQUITY = Decimal("1000000.00")
+PAID_PLANS = {"trader", "pro", "elite"}
+STARTING_EQUITY = "1000000.00"
 
 
 class SessionCreate(BaseModel):
-    mode: str = Field(pattern="^(replay|delayed|drill)$")
+    mode: str = Field(pattern="^(replay|delayed)$")
     instrument_id: str = "NSE:RELIANCE"
+    source: str = Field(default="synthetic-test", pattern="^(synthetic-test|polygon)$")
+    history_days: int = Field(default=30)
     drill_id: str | None = None
 
 
 class Control(BaseModel):
-    action: str = Field(pattern="^(play|pause|step|speed|fork|finish)$")
+    action: str = Field(pattern="^(play|pause|step|speed|heartbeat|fork|finish)$")
     value: int | None = None
+    controller_id: str | None = None
 
 
 class OrderCreate(BaseModel):
@@ -42,6 +48,9 @@ class OrderCreate(BaseModel):
     quantity: Decimal = Field(gt=0)
     limit_price: Decimal | None = Field(default=None, gt=0)
     stop_price: Decimal | None = Field(default=None, gt=0)
+    stop_loss: Decimal | None = Field(default=None, gt=0)
+    take_profit: Decimal | None = Field(default=None, gt=0)
+    time_in_force: str = Field(default="GTC", pattern="^(DAY|GTC)$")
     reduce_only: bool = False
 
 
@@ -51,7 +60,11 @@ class OrderAmend(BaseModel):
 
 
 class PositionClose(BaseModel):
-    quantity: Decimal = Field(gt=0)
+    quantity: Decimal | None = Field(default=None, gt=0)
+
+
+class AccountReset(BaseModel):
+    reason: str = Field(default="learner_requested", max_length=120)
 
 
 class JournalUpdate(BaseModel):
@@ -61,30 +74,71 @@ class JournalUpdate(BaseModel):
 
 class DrillPublish(BaseModel):
     title: str = Field(min_length=3, max_length=120)
-    title_hi: str = Field(min_length=3, max_length=120)
+    title_hi: str = Field(default="", max_length=120)
     instrument_id: str
     objective: str = Field(min_length=3, max_length=1000)
     required: bool = False
 
 
-def _money(value: Decimal) -> str:
-    return str(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+def get_simulator_repository(database=Depends(get_simulator_db)):
+    return MongoSimulatorRepository(database)
+
+
+@lru_cache(maxsize=32)
+def _dataset(dataset_id: str) -> dict:
+    return get_dataset(dataset_id)
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _require_access(user: User) -> User:
-    if user.subscription_plan not in {"trader", "pro", "elite"}:
+def _fingerprint(scope: str, payload: object) -> str:
+    encoded = json.dumps([scope, payload], sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _require_paid(user: User) -> None:
+    if user.subscription_plan not in PAID_PLANS:
         raise HTTPException(403, detail={"code": "ENTITLEMENT_REQUIRED", "message": "Trading practice requires the Trader plan or higher."})
-    return user
 
 
-def _require_admin(user: User) -> User:
+def _require_admin(user: User) -> None:
     if user.role != "admin":
         raise HTTPException(403, detail={"code": "ADMIN_REQUIRED", "message": "Simulator administration requires an admin role."})
-    return user
+
+
+def _owned(repo, session_id: str, user: User) -> dict:
+    state = repo.snapshot(session_id)
+    if not state or state["session"].get("learner_id") != user.id:
+        raise HTTPException(404, detail="Simulation session not found.")
+    return state
+
+
+def _snapshot(state: dict) -> dict:
+    session = state["session"]
+    if "account_id" not in session:
+        return {**{key: value for key, value in session.items() if key != "_id"}, "legacy_read_only": True, "data_status": "legacy"}
+    return {
+        "id": session["id"], "mode": session["mode"], "instrument_id": session["instrument_id"],
+        "dataset_id": session["dataset_id"], "fx_dataset_id": session.get("fx_dataset_id"),
+        "data_source": session["data_source"], "clock": session["clock"],
+        "market_time": session.get("market_time"), "state": session["state"], "speed": session["speed"],
+        "assisted": session.get("assisted", False), "revision": session["revision"],
+        "legacy_read_only": False, "data_status": session.get("data_status", "ready"),
+        "coverage": session.get("coverage", {}), "total_bars": session.get("total_bars", 0),
+        "account": state["account"], "positions": state["positions"], "orders": state["orders"],
+        "fills": state["fills"], "ledger": state["ledger"],
+    }
+
+
+def _mutation(repo, state: dict, key: str, scope: str, payload: object, operation):
+    if state["session"].get("legacy_read_only") or "account_id" not in state["session"]:
+        raise HTTPException(409, detail={"code": "LEGACY_READ_ONLY", "message": "This legacy session is available as read-only history."})
+    try:
+        return repo.mutate(state["session"]["id"], f"{scope}:{key}", _fingerprint(scope, payload), operation)
+    except IdempotencyConflict:
+        raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT", "message": "This idempotency key was used for a different command."}) from None
 
 
 def _instruments() -> list[dict]:
@@ -95,345 +149,343 @@ def _instruments() -> list[dict]:
         ("FX", "forex", "USD", ["EUR-USD", "GBP-USD", "USD-JPY", "USD-INR", "AUD-USD", "USD-CAD"]),
         ("CME", "future", "USD", ["ESM26", "NQM26", "GCM26", "CLM26"]),
     ]
-    items = []
+    result = []
     for venue, asset_class, currency, symbols in groups:
         for symbol in symbols:
-            items.append({
-                "id": f"{venue}:{symbol}",
-                "symbol": symbol,
-                "venue": venue,
-                "asset_class": asset_class,
-                "quote_currency": currency,
-                "tick_size": "0.01",
-                "quantity_increment": "1",
-                "contract_multiplier": "1" if asset_class != "future" else "10",
-                # Keep `source` as the replay default for older clients. The
-                # mode-specific fields prevent the setup page from claiming
-                # that a Polygon-supported US symbol is synthetic in delayed
-                # paper mode.
-                "source": "synthetic-test",
-                "replay_source": "synthetic-test",
-                "delayed_source": "polygon-delayed" if venue == "NASDAQ" else "synthetic-test",
-                "polygon_supported": venue == "NASDAQ",
+            polygon = venue == "NASDAQ"
+            result.append({
+                "id": f"{venue}:{symbol}", "symbol": symbol, "name": symbol, "venue": venue,
+                "asset_class": asset_class, "quote_currency": currency, "source": "synthetic-test",
+                "replay_source": "polygon" if polygon else "synthetic-test",
+                "delayed_source": "polygon-delayed" if polygon else "synthetic-test",
+                "polygon_supported": polygon, "tick_size": "0.01", "quantity_increment": "1",
+                "contract_multiplier": "10" if asset_class == "future" else "1",
             })
-    return items
+    return result
 
 
-def _price(instrument_id: str, bar: int) -> Decimal:
-    seed = sum(ord(char) for char in instrument_id) % 700 + 50
-    return Decimal(seed) + Decimal(bar) * Decimal("0.35")
+def _aggregate(bars: list[dict], bucket_minutes: int) -> list[dict]:
+    if bucket_minutes == 1:
+        return bars
+    seconds = bucket_minutes * 60
+    buckets: dict[int, list[dict]] = {}
+    for bar in bars:
+        buckets.setdefault((bar["time"] // seconds) * seconds, []).append(bar)
+    result = []
+    for timestamp in sorted(buckets):
+        group = buckets[timestamp]
+        result.append({
+            "time": timestamp, "open": group[0]["open"], "high": money(max(D(item["high"]) for item in group)),
+            "low": money(min(D(item["low"]) for item in group)), "close": group[-1]["close"],
+            "volume": format(sum((D(item["volume"]) for item in group), Decimal(0)), "f"),
+        })
+    return result
 
 
-def _polygon_symbol(instrument_id: str) -> str | None:
-    venue, _, symbol = instrument_id.partition(":")
-    if venue == "NASDAQ":
-        return symbol
-    return None
+def _fx_bar(dataset_id: str | None, timestamp: int) -> dict | None:
+    if not dataset_id:
+        return None
+    choices = [bar for bar in _dataset(dataset_id)["bars"] if bar["time"] <= timestamp]
+    if not choices or timestamp - choices[-1]["time"] > 86400:
+        raise HTTPException(503, detail={"code": "FX_DATA_UNAVAILABLE", "message": "A same-clock USD/INR conversion rate is unavailable."})
+    return choices[-1]
 
 
-def _account(db: Database, learner_id: str) -> dict:
-    account = db.simulator_accounts.find_one({"learner_id": learner_id, "mode": "delayed", "status": "active"}, {"_id": 0})
-    if account:
-        return account
-    account = {"id": f"acct_{uuid4().hex}", "learner_id": learner_id, "mode": "delayed", "status": "active", "reporting_currency": "INR", "cash": _money(STARTING_EQUITY), "equity": _money(STARTING_EQUITY), "revision": 1, "created_at": _now()}
-    db.simulator_accounts.insert_one(account)
-    # PyMongo/mongomock may add `_id` to the in-memory document during
-    # insertion. Mongo's internal identifier is not part of the public
-    # simulator contract and ObjectId cannot be JSON encoded by FastAPI.
-    account.pop("_id", None)
-    return account
-
-
-def _session(db: Database, session_id: str, learner_id: str) -> dict:
-    session = db.simulator_sessions.find_one({"id": session_id, "learner_id": learner_id})
-    if not session:
-        raise HTTPException(404, detail="Simulation session not found.")
-    return session
-
-
-def _snapshot(db: Database, session: dict) -> dict:
-    # Older sessions may embed Mongo's internal identifier in their account.
-    # Sanitize the response without rewriting historical persisted records.
-    session = {**session, "account": {key: value for key, value in session["account"].items() if key != "_id"}}
-    orders = list(db.simulator_orders.find({"session_id": session["id"]}, {"_id": 0}).sort("created_at", -1))
-    fills = list(db.simulator_fills.find({"session_id": session["id"]}, {"_id": 0}).sort("created_at", -1))
-    return {"id": session["id"], "mode": session["mode"], "instrument_id": session["instrument_id"], "data_source": session.get("data_source", "synthetic-test"), "clock": session["clock"], "state": session["state"], "speed": session["speed"], "assisted": session.get("assisted", False), "revision": session["revision"], "account": session["account"], "orders": orders, "fills": fills}
-
-
-def _records(db: Database, collection: str, session_id: str) -> list[dict]:
-    return list(db[collection].find({"session_id": session_id}, {"_id": 0}).sort("created_at", -1))
-
-
-def _payload_fingerprint(payload: BaseModel) -> str:
-    encoded = json.dumps(payload.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode()).hexdigest()
-
-
-def _emit_event(db: Database, session_id: str, event_type: str, payload: dict) -> dict:
-    sequence = db.simulator_event_counters.find_one_and_update(
-        {"session_id": session_id}, {"$inc": {"sequence": 1}}, upsert=True, return_document=True
-    )["sequence"]
-    event = {"session_id": session_id, "sequence": sequence, "revision": payload.get("revision"), "type": event_type, "payload": payload, "created_at": _now()}
-    db.simulator_events.insert_one(event)
-    event.pop("_id", None)
-    return event
-
-
-@router.get("/bootstrap")
-def bootstrap(user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    user = _require_access(user)
-    account = _account(db, user.id)
-    return {"reporting_currency": "INR", "equity": account["equity"], "account_id": account["id"], "modes": ["replay", "delayed"], "ai_review": {"available": False, "reason": "A review provider has not been configured."}, "data_labels": ["synthetic-test", "historical-replay", "delayed-feed"]}
+def advance_state(current: dict, count: int = 1) -> tuple:
+    session = {**current["session"]}
+    dataset = _dataset(session["dataset_id"])
+    end = min(session["clock"] + count, len(dataset["bars"]))
+    account = current["account"]
+    positions, orders = current["positions"], current["orders"]
+    fills, ledger = list(current["fills"]), list(current["ledger"])
+    for index in range(session["clock"], end):
+        bar = dataset["bars"][index]
+        fx = _fx_bar(session.get("fx_dataset_id"), bar["time"])
+        result = process_bar(
+            account, positions, orders, bar, index + 1, fee_bps=Decimal("5"),
+            instrument_id=session["instrument_id"], fx_rate=D(fx["close"]) if fx else Decimal("1"),
+            fx_cost_bps=Decimal("5") if fx else Decimal("0"),
+            spread_bps=Decimal("5"), slippage_bps=Decimal("2"),
+        )
+        account, positions, orders = result.account, result.positions, result.orders
+        fills.extend(result.fills)
+        ledger.extend(result.ledger)
+        session["market_time"] = bar["time"]
+    session["clock"] = end
+    if end >= len(dataset["bars"]):
+        session["state"] = "finished" if session["mode"] == "replay" else "paused"
+    return session, account, positions, orders, fills, ledger
 
 
 @router.get("/instruments")
 def instruments():
-    # The catalog is non-user data. Loading it before bootstrap lets the
-    # client render an actionable sign-in/entitlement state instead of a
-    # blank selector when account access is the only failed request.
     return _instruments()
 
 
-@router.get("/datasets")
-def datasets(user: User = Depends(get_current_user)):
-    _require_access(user)
-    return [{"id": "synthetic-global-v1", "label": "Synthetic global testing dataset", "precision": "1m", "source": "synthetic-test", "replay_range": {"start": "2025-01-02T09:15:00Z", "end": "2025-01-31T15:30:00Z"}}]
+@router.get("/bootstrap")
+def bootstrap(user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    _require_paid(user)
+    account = repo.find_active_account(user.id, "delayed")
+    return {"reporting_currency": "INR", "equity": account["equity"] if account else STARTING_EQUITY, "account_id": account["id"] if account else None, "modes": ["replay", "delayed"]}
 
 
 @router.post("/sessions")
-def create_session(payload: SessionCreate, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    user = _require_access(user)
+async def create_session(payload: SessionCreate, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    _require_paid(user)
     if payload.instrument_id not in {item["id"] for item in _instruments()}:
-        raise HTTPException(422, detail="Unsupported test instrument.")
-    if payload.mode == "delayed":
-        account = _account(db, user.id)
-    else:
-        account = {"id": f"acct_{uuid4().hex}", "reporting_currency": "INR", "cash": _money(STARTING_EQUITY), "equity": _money(STARTING_EQUITY), "revision": 1}
-    session = {"id": f"sim_{uuid4().hex}", "learner_id": user.id, "mode": payload.mode, "instrument_id": payload.instrument_id, "dataset_id": "synthetic-global-v1", "data_source": "polygon-delayed" if payload.mode == "delayed" and _polygon_symbol(payload.instrument_id) else "synthetic-test", "clock": 100, "state": "paused", "speed": 1, "revision": 1, "account": account, "assisted": False, "drill_id": payload.drill_id, "created_at": _now()}
-    db.simulator_sessions.insert_one(session)
-    return _snapshot(db, session)
+        raise HTTPException(422, detail={"code": "UNSUPPORTED_INSTRUMENT", "message": "The selected instrument is not available."})
+    if payload.history_days not in {7, 30, 90, 365}:
+        raise HTTPException(422, detail={"code": "INVALID_HISTORY_DAYS", "message": "History must be 7, 30, 90 or 365 days."})
+    if payload.source == "polygon" and not payload.instrument_id.startswith("NASDAQ:"):
+        raise HTTPException(422, detail={"code": "UNSUPPORTED_PROVIDER_INSTRUMENT", "message": "Polygon replay is currently enabled for supported US stocks."})
+    try:
+        dataset = await load_dataset(payload.instrument_id, payload.source, payload.history_days)
+        fx_dataset = await load_dataset("FX:USD-INR", "polygon", payload.history_days) if payload.source == "polygon" and payload.instrument_id.startswith("NASDAQ:") else None
+    except DatasetError as error:
+        raise HTTPException(503, detail={"code": error.code, "message": error.message}) from None
+    account = repo.find_active_account(user.id, "delayed") if payload.mode == "delayed" else None
+    if not account:
+        account = {
+            "id": f"acct_{uuid4().hex}", "learner_id": user.id, "mode": payload.mode, "status": "active",
+            "reporting_currency": "INR", "cash": STARTING_EQUITY, "equity": STARTING_EQUITY,
+            "buying_power": STARTING_EQUITY, "reserved": "0.00", "realized_pnl": "0.00",
+            "unrealized_pnl": "0.00", "revision": 1, "created_at": _now(),
+        }
+    initial_clock = min(300, max(0, len(dataset["bars"]) - (1 if payload.mode == "delayed" else 0)))
+    session = {
+        "id": f"sim_{uuid4().hex}", "learner_id": user.id, "account_id": account["id"],
+        "mode": payload.mode, "instrument_id": payload.instrument_id, "dataset_id": dataset["id"],
+        "fx_dataset_id": fx_dataset["id"] if fx_dataset else None, "data_source": dataset["source"],
+        "history_days": payload.history_days, "clock": initial_clock,
+        "market_time": dataset["bars"][initial_clock - 1]["time"] if initial_clock else None,
+        "state": "paused", "speed": 1, "revision": 1, "coverage": dataset["coverage"],
+        "total_bars": len(dataset["bars"]), "data_status": "ready", "created_at": _now(),
+        "drill_id": payload.drill_id, "assisted": False,
+    }
+    try:
+        state = repo.create_session_bundle(user.id, idempotency_key, _fingerprint("session", payload.model_dump(mode="json")), account, session)
+    except IdempotencyConflict:
+        raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT", "message": "This idempotency key was used for another session request."}) from None
+    return _snapshot(state)
+
+
+@router.get("/sessions")
+def list_sessions(user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    return [_snapshot(repo.snapshot(item["id"])) for item in repo.list_sessions(user.id)]
 
 
 @router.get("/sessions/{session_id}")
-def get_session(session_id: str, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user)
-    return _snapshot(db, _session(db, session_id, user.id))
-
-
-@router.get("/sessions/{session_id}/orders")
-def orders(session_id: str, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user); _session(db, session_id, user.id)
-    return _records(db, "simulator_orders", session_id)
-
-
-@router.get("/sessions/{session_id}/fills")
-def fills(session_id: str, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user); _session(db, session_id, user.id)
-    return _records(db, "simulator_fills", session_id)
-
-
-@router.get("/sessions/{session_id}/positions")
-def positions(session_id: str, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user); _session(db, session_id, user.id)
-    return _records(db, "simulator_positions", session_id)
-
-
-@router.get("/sessions/{session_id}/ledger")
-def ledger(session_id: str, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user); _session(db, session_id, user.id)
-    return _records(db, "simulator_ledger", session_id)
+def get_session(session_id: str, user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    return _snapshot(_owned(repo, session_id, user))
 
 
 @router.get("/sessions/{session_id}/candles")
-async def candles(session_id: str, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user)
-    session = _session(db, session_id, user.id)
-    if session.get("data_source") == "polygon-delayed":
-        symbol = _polygon_symbol(session["instrument_id"])
-        history = await polygon_service.get_history(symbol, "1D") if symbol else None
-        if history and history.source == "polygon":
-            bars = history.bars[: min(session["clock"], len(history.bars))]
-            return [{"time": bar.time, "open": _money(Decimal(str(bar.open))), "high": _money(Decimal(str(bar.high))), "low": _money(Decimal(str(bar.low))), "close": _money(Decimal(str(bar.close))), "volume": str(int(bar.volume or 0))} for bar in bars]
-        raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "Polygon delayed data is unavailable for this instrument right now."})
-    visible = min(session["clock"], 400)
-    result = []
-    for index in range(max(0, visible - 100), visible):
-        close = _price(session["instrument_id"], index)
-        result.append({"time": 1735809300 + index * 60, "open": _money(close - Decimal("0.20")), "high": _money(close + Decimal("0.45")), "low": _money(close - Decimal("0.55")), "close": _money(close), "volume": str(1000 + index * 7)})
-    return result
+def candles(session_id: str, before: int | None = None, limit: int = Query(500, ge=1, le=2000), timeframe: str = Query("1m", pattern="^(1m|5m|15m|1h|1d)$"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    session = _owned(repo, session_id, user)["session"]
+    visible = _dataset(session["dataset_id"])["bars"][:session["clock"]]
+    if before is not None:
+        visible = [bar for bar in visible if bar["time"] < before]
+    minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "1d": 1440}[timeframe]
+    return _aggregate(visible, minutes)[-limit:]
+
+
+def _records(session_id: str, kind: str, user: User, repo):
+    return _owned(repo, session_id, user)[kind]
+
+
+@router.get("/sessions/{session_id}/orders")
+def orders(session_id: str, user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    return _records(session_id, "orders", user, repo)
+
+
+@router.get("/sessions/{session_id}/fills")
+def fills(session_id: str, user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    return _records(session_id, "fills", user, repo)
+
+
+@router.get("/sessions/{session_id}/positions")
+def positions(session_id: str, user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    return _records(session_id, "positions", user, repo)
+
+
+@router.get("/sessions/{session_id}/ledger")
+def ledger(session_id: str, user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    return _records(session_id, "ledger", user, repo)
 
 
 @router.post("/sessions/{session_id}/controls")
-def control(session_id: str, payload: Control, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user)
-    session = _session(db, session_id, user.id)
-    if payload.action == "fork":
-        clone = {key: value for key, value in session.items() if key != "_id"}
-        clone.update({"id": f"sim_{uuid4().hex}", "state": "paused", "assisted": True, "revision": 1, "created_at": _now()})
-        db.simulator_sessions.insert_one(clone)
-        return _snapshot(db, clone)
-    if payload.action == "step": session["clock"] += 1
-    if payload.action == "play": session["state"] = "playing"
-    if payload.action == "pause": session["state"] = "paused"
-    if payload.action == "speed": session["speed"] = payload.value if payload.value in {1, 5, 20} else 1
-    if payload.action == "finish": session["state"] = "finished"
-    session["revision"] += 1
-    db.simulator_sessions.replace_one({"id": session_id}, session)
-    _emit_event(db, session_id, "session.updated", {"revision": session["revision"], "clock": session["clock"], "state": session["state"], "speed": session["speed"]})
-    return _snapshot(db, session)
+def control(session_id: str, payload: Control, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    _require_paid(user)
+    state = _owned(repo, session_id, user)
+    stamp = _now()
+
+    def operation(current):
+        session = {**current["session"]}
+        changes = {}
+        if payload.action == "step":
+            session, account, positions, orders, fills, ledger = advance_state(current)
+            changes.update(account=account, positions=positions, orders=orders, fills=fills, ledger=ledger)
+        elif payload.action in {"play", "pause"}:
+            session["state"] = "playing" if payload.action == "play" else "paused"
+        elif payload.action == "speed":
+            session["speed"] = payload.value if payload.value in {1, 5, 20} else 1
+        elif payload.action == "finish":
+            session["state"] = "finished"
+        elif payload.action == "heartbeat":
+            if not payload.controller_id:
+                raise HTTPException(422, detail={"code": "CONTROLLER_ID_REQUIRED"})
+            session.update(controller_id=payload.controller_id, controller_heartbeat_at=stamp, controller_lease_seconds=15)
+        elif payload.action == "fork":
+            raise HTTPException(501, detail={"code": "FORK_NOT_READY", "message": "Replay fork reconstruction is not enabled in this testing increment."})
+        event = {"id": f"evt_{uuid4().hex}", "type": "session.updated", "created_at": stamp}
+        changes.update(session=session, events=[event])
+        return _snapshot({**current, **changes}), changes
+
+    return _mutation(repo, state, idempotency_key, "control", payload.model_dump(mode="json"), operation)
 
 
 @router.post("/sessions/{session_id}/orders")
-async def create_order(session_id: str, payload: OrderCreate, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user)
-    session = _session(db, session_id, user.id)
-    fingerprint = _payload_fingerprint(payload)
-    existing = db.simulator_idempotency.find_one({"session_id": session_id, "key": idempotency_key})
-    if existing:
-        if existing["fingerprint"] != fingerprint:
-            raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT", "message": "This idempotency key was already used for a different order."})
-        return existing["response"]
-    price = payload.limit_price or _price(session["instrument_id"], session["clock"] + 1)
-    if payload.order_type == "market" and session.get("data_source") == "polygon-delayed":
-        symbol = _polygon_symbol(session["instrument_id"])
-        quote = await polygon_service.get_quote(symbol) if symbol else None
-        if not quote or quote.source != "polygon":
-            raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "Polygon delayed quote is unavailable; the order was not submitted."})
-        price = Decimal(str(quote.price))
-    execution = decide_fill(
-        OrderCommand(Side(payload.side), OrderType(payload.order_type), payload.quantity, payload.limit_price, payload.stop_price, payload.reduce_only),
-        Quote(price, price, price, int(datetime.now(timezone.utc).timestamp())),
-        Policy(),
-    ) if payload.order_type == "market" else None
-    if payload.order_type == "market" and execution is None:
-        raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "A current execution quote is unavailable; the order was not submitted."})
-    if execution is not None:
-        price = execution.price
-    notional = price * payload.quantity
-    cash = Decimal(session["account"]["cash"])
-    if payload.side == "buy" and notional > cash:
-        raise HTTPException(409, detail={"code": "INSUFFICIENT_BUYING_POWER", "message": "Order exceeds available virtual cash."})
-    order = {"id": f"ord_{uuid4().hex}", "session_id": session_id, "side": payload.side, "order_type": payload.order_type, "quantity": str(payload.quantity), "price": _money(price), "status": "filled" if payload.order_type == "market" else "open", "created_at": _now(), "reduce_only": payload.reduce_only}
-    if order["status"] == "filled":
-        fee = execution.fee if execution is not None else notional * Decimal("0.0005")
-        delta = -notional - fee if payload.side == "buy" else notional - fee
-        session["account"]["cash"] = _money(cash + delta)
-        session["account"]["equity"] = session["account"]["cash"]
-        session["revision"] += 1
-        fill = {"id": f"fill_{uuid4().hex}", "session_id": session_id, "order_id": order["id"], "price": _money(price), "quantity": str(payload.quantity), "fee": _money(fee), "created_at": _now()}
-        existing_position = db.simulator_positions.find_one({"session_id": session_id, "instrument_id": session["instrument_id"]})
-        prior_quantity = Decimal(existing_position["quantity"]) if existing_position else Decimal("0")
-        signed_quantity = payload.quantity if payload.side == "buy" else -payload.quantity
-        new_quantity = prior_quantity + signed_quantity
-        position = {"session_id": session_id, "instrument_id": session["instrument_id"], "quantity": str(new_quantity), "average_price": _money(price), "updated_at": _now()}
-        if new_quantity == 0:
-            db.simulator_positions.delete_one({"session_id": session_id, "instrument_id": session["instrument_id"]})
-        else:
-            db.simulator_positions.replace_one({"session_id": session_id, "instrument_id": session["instrument_id"]}, position, upsert=True)
-        db.simulator_fills.insert_one(fill)
-        db.simulator_ledger.insert_one({"session_id": session_id, "order_id": order["id"], "amount": _money(delta), "currency": "INR", "created_at": _now()})
-        db.simulator_sessions.replace_one({"id": session_id}, session)
-    db.simulator_orders.insert_one(order)
-    response = {key: value for key, value in order.items() if key != "_id"}
-    db.simulator_idempotency.insert_one({"session_id": session_id, "key": idempotency_key, "fingerprint": fingerprint, "response": response})
-    _emit_event(db, session_id, "order.updated", {"revision": session["revision"], "order": response})
-    return response
+def create_order(session_id: str, payload: OrderCreate, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    _require_paid(user)
+    state = _owned(repo, session_id, user)
+    order_id, stamp = f"ord_{uuid4().hex}", _now()
+
+    def operation(current):
+        if payload.side == "sell" and not payload.reduce_only:
+            raise HTTPException(422, detail={"code": "LONG_ONLY", "message": "This educational cash preset is long-only."})
+        session = current["session"]
+        dataset = _dataset(session["dataset_id"])
+        if not session["clock"]:
+            raise HTTPException(409, detail={"code": "NO_VISIBLE_PRICE"})
+        reference = payload.limit_price or payload.stop_price or D(dataset["bars"][session["clock"] - 1]["close"])
+        fx = _fx_bar(session.get("fx_dataset_id"), dataset["bars"][session["clock"] - 1]["time"])
+        reserve = reference * payload.quantity * (D(fx["close"]) if fx else Decimal("1")) * Decimal("1.001") if payload.side == "buy" else Decimal("0")
+        account = {**current["account"]}
+        if D(account["cash"]) - D(account["reserved"]) < reserve:
+            raise HTTPException(409, detail={"code": "INSUFFICIENT_BUYING_POWER", "message": "Order exceeds available virtual buying power."})
+        account["reserved"] = money(D(account["reserved"]) + reserve)
+        account["buying_power"] = money(D(account["cash"]) - D(account["reserved"]))
+        order = {
+            "id": order_id, "session_id": session_id, "instrument_id": session["instrument_id"],
+            "side": payload.side, "order_type": payload.order_type, "quantity": format(payload.quantity, "f"),
+            "limit_price": money(payload.limit_price) if payload.limit_price else None,
+            "stop_price": money(payload.stop_price) if payload.stop_price else None,
+            "stop_loss": money(payload.stop_loss) if payload.stop_loss else None,
+            "take_profit": money(payload.take_profit) if payload.take_profit else None,
+            "status": "open", "submitted_clock": session["clock"], "reduce_only": payload.reduce_only,
+            "time_in_force": payload.time_in_force, "reserved": money(reserve), "created_at": stamp,
+        }
+        orders = [*current["orders"], order]
+        return order, {"account": account, "orders": orders, "events": [{"id": f"evt_{order_id}", "type": "order.created", "created_at": stamp}]}
+
+    return _mutation(repo, state, idempotency_key, "order", payload.model_dump(mode="json"), operation)
 
 
 @router.patch("/sessions/{session_id}/orders/{order_id}")
-def amend_order(session_id: str, order_id: str, payload: OrderAmend, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user); _session(db, session_id, user.id)
-    order = db.simulator_orders.find_one({"id": order_id, "session_id": session_id})
-    if not order:
-        raise HTTPException(404, detail="Order not found.")
-    if order["status"] != "open":
-        raise HTTPException(409, detail={"code": "ORDER_NOT_AMENDABLE", "message": "Only open orders may be amended."})
-    if payload.limit_price is None and payload.stop_price is None:
-        raise HTTPException(422, detail="Provide a limit or stop price.")
-    fingerprint = _payload_fingerprint(payload)
-    scope = f"amend:{order_id}"
-    previous = db.simulator_command_idempotency.find_one({"session_id": session_id, "scope": scope, "key": idempotency_key})
-    if previous:
-        if previous["fingerprint"] != fingerprint:
-            raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT", "message": "This idempotency key was already used for a different command."})
-        return previous["response"]
-    if payload.limit_price is not None:
-        order["price"] = _money(payload.limit_price)
-        order["limit_price"] = _money(payload.limit_price)
-    if payload.stop_price is not None:
-        order["stop_price"] = _money(payload.stop_price)
-    order["amended_at"] = _now()
-    db.simulator_orders.replace_one({"id": order_id, "session_id": session_id}, order)
-    response = {key: value for key, value in order.items() if key != "_id"}
-    db.simulator_command_idempotency.insert_one({"session_id": session_id, "scope": scope, "key": idempotency_key, "fingerprint": fingerprint, "response": response})
-    return response
+def amend_order(session_id: str, order_id: str, payload: OrderAmend, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    _require_paid(user)
+    state = _owned(repo, session_id, user)
+
+    def operation(current):
+        orders = [{**item} for item in current["orders"]]
+        order = next((item for item in orders if item["id"] == order_id), None)
+        if not order:
+            raise HTTPException(404, detail="Order not found.")
+        if order["status"] != "open":
+            raise HTTPException(409, detail={"code": "ORDER_NOT_AMENDABLE"})
+        if payload.limit_price is not None:
+            order["limit_price"] = money(payload.limit_price)
+        if payload.stop_price is not None:
+            order["stop_price"] = money(payload.stop_price)
+        return order, {"orders": orders, "events": [{"id": f"evt_{uuid4().hex}", "type": "order.amended", "created_at": _now()}]}
+
+    return _mutation(repo, state, idempotency_key, f"amend:{order_id}", payload.model_dump(mode="json"), operation)
 
 
 @router.post("/sessions/{session_id}/orders/{order_id}/cancel")
-def cancel_order(session_id: str, order_id: str, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user); _session(db, session_id, user.id)
-    scope = f"cancel:{order_id}"
-    previous = db.simulator_command_idempotency.find_one({"session_id": session_id, "scope": scope, "key": idempotency_key})
-    if previous:
-        return previous["response"]
-    order = db.simulator_orders.find_one({"id": order_id, "session_id": session_id})
-    if not order:
-        raise HTTPException(404, detail="Order not found.")
-    if order["status"] != "open":
-        raise HTTPException(409, detail={"code": "ORDER_NOT_CANCELLABLE", "message": "Only open orders may be cancelled."})
-    order.update({"status": "cancelled", "cancelled_at": _now()})
-    db.simulator_orders.replace_one({"id": order_id, "session_id": session_id}, order)
-    response = {key: value for key, value in order.items() if key != "_id"}
-    db.simulator_command_idempotency.insert_one({"session_id": session_id, "scope": scope, "key": idempotency_key, "fingerprint": "cancel", "response": response})
-    return response
+def cancel_order(session_id: str, order_id: str, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    _require_paid(user)
+    state = _owned(repo, session_id, user)
+
+    def operation(current):
+        orders = [{**item} for item in current["orders"]]
+        order = next((item for item in orders if item["id"] == order_id), None)
+        if not order:
+            raise HTTPException(404, detail="Order not found.")
+        if order["status"] != "open":
+            raise HTTPException(409, detail={"code": "ORDER_NOT_CANCELLABLE"})
+        order["status"] = "cancelled"
+        account = {**current["account"]}
+        account["reserved"] = money(max(Decimal("0"), D(account["reserved"]) - D(order.get("reserved", 0))))
+        account["buying_power"] = money(D(account["cash"]) - D(account["reserved"]))
+        return order, {"account": account, "orders": orders, "events": [{"id": f"evt_{uuid4().hex}", "type": "order.cancelled", "created_at": _now()}]}
+
+    return _mutation(repo, state, idempotency_key, f"cancel:{order_id}", {}, operation)
 
 
 @router.post("/sessions/{session_id}/positions/{instrument_id}/close")
-def close_position(session_id: str, instrument_id: str, payload: PositionClose, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user)
-    session = _session(db, session_id, user.id)
-    position = db.simulator_positions.find_one({"session_id": session_id, "instrument_id": instrument_id})
+def close_position(session_id: str, instrument_id: str, payload: PositionClose, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    state = _owned(repo, session_id, user)
+    position = next((item for item in state["positions"] if item["instrument_id"] == instrument_id), None)
     if not position:
         raise HTTPException(404, detail="Position not found.")
-    scope = f"close:{instrument_id}"
-    fingerprint = _payload_fingerprint(payload)
-    previous = db.simulator_command_idempotency.find_one({"session_id": session_id, "scope": scope, "key": idempotency_key})
-    if previous:
-        if previous["fingerprint"] != fingerprint:
-            raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT", "message": "This idempotency key was already used for a different command."})
-        return previous["response"]
-    current_quantity = Decimal(position["quantity"])
-    quantity = min(abs(current_quantity), payload.quantity)
-    side = "sell" if current_quantity > 0 else "buy"
-    price = _price(instrument_id, session["clock"] + 1)
-    notional = price * quantity
-    fee = notional * Decimal("0.0005")
-    cash = Decimal(session["account"]["cash"])
-    delta = notional - fee if side == "sell" else -notional - fee
-    session["account"]["cash"] = _money(cash + delta)
-    session["account"]["equity"] = session["account"]["cash"]
-    session["revision"] += 1
-    db.simulator_sessions.replace_one({"id": session_id}, session)
-    remaining = current_quantity - quantity if current_quantity > 0 else current_quantity + quantity
-    if remaining == 0:
-        db.simulator_positions.delete_one({"session_id": session_id, "instrument_id": instrument_id})
-    else:
-        db.simulator_positions.update_one({"session_id": session_id, "instrument_id": instrument_id}, {"$set": {"quantity": str(remaining), "updated_at": _now()}})
-    order = {"id": f"ord_{uuid4().hex}", "session_id": session_id, "side": side, "order_type": "market", "quantity": str(quantity), "price": _money(price), "status": "filled", "reduce_only": True, "created_at": _now()}
-    fill = {"id": f"fill_{uuid4().hex}", "session_id": session_id, "order_id": order["id"], "price": _money(price), "quantity": str(quantity), "fee": _money(fee), "created_at": _now()}
-    db.simulator_orders.insert_one(order)
-    db.simulator_fills.insert_one(fill)
-    db.simulator_ledger.insert_one({"session_id": session_id, "order_id": order["id"], "amount": _money(delta), "currency": "INR", "created_at": _now()})
-    response = {key: value for key, value in order.items() if key != "_id"}
-    db.simulator_command_idempotency.insert_one({"session_id": session_id, "scope": scope, "key": idempotency_key, "fingerprint": fingerprint, "response": response})
-    return response
+    quantity = min(payload.quantity or D(position["quantity"]), D(position["quantity"]))
+    return create_order(session_id, OrderCreate(side="sell", order_type="market", quantity=quantity, reduce_only=True), idempotency_key, user, repo)
+
+
+@router.get("/sessions/{session_id}/journal")
+def get_journal(session_id: str, user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    return _owned(repo, session_id, user)["session"].get("journal", {"plan": "", "reflection": ""})
 
 
 @router.put("/sessions/{session_id}/journal")
-def journal(session_id: str, payload: JournalUpdate, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user); _session(db, session_id, user.id)
-    db.simulator_journals.update_one({"session_id": session_id}, {"$set": {**payload.model_dump(), "updated_at": _now()}}, upsert=True)
-    return {"saved": True}
+def save_journal(session_id: str, payload: JournalUpdate, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    state = _owned(repo, session_id, user)
+
+    def operation(current):
+        session = {**current["session"], "journal": {**payload.model_dump(), "updated_at": _now()}}
+        return session["journal"], {"session": session}
+
+    return _mutation(repo, state, idempotency_key, "journal", payload.model_dump(), operation)
+
+
+@router.get("/sessions/{session_id}/review")
+def review(session_id: str, user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    state = _owned(repo, session_id, user)
+    journal = state["session"].get("journal", {})
+    has_stop = any(order.get("stop_loss") or order.get("order_type") == "stop_market" for order in state["orders"])
+    dimensions = {"risk_sizing": 40 if has_stop else 10, "plan_adherence": 35 if journal.get("plan") else 0, "execution_discipline": 25 if journal.get("reflection") else 10}
+    score = sum(dimensions.values())
+    hard_violation = any(order.get("rejection_reason") for order in state["orders"])
+    return {"session_id": session_id, "score": score, "passed": score >= 80 and not hard_violation and not state["session"].get("assisted", False), "assisted": state["session"].get("assisted", False), "dimensions": dimensions, "ai_review": {"available": False, "reason": "A review provider has not been configured."}}
+
+
+@router.get("/drills")
+def drills(user: User = Depends(get_current_user), database=Depends(get_simulator_db)):
+    _require_paid(user)
+    starter = {"id": "risk-sizing-v1", "version": 1, "state": "published", "title": "Position sizing", "title_hi": "पोज़िशन साइज़िंग", "required": False, "instrument_id": "NSE:RELIANCE", "objective": "Keep planned risk within 1% of capital."}
+    return [starter, *list(database.simulator_drills.find({"state": "published"}, {"_id": 0}).sort("published_at", -1))]
+
+
+@router.post("/accounts/{account_id}/reset")
+def reset_account(account_id: str, payload: AccountReset, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
+    _require_paid(user)
+    account = repo.find_active_account(user.id, "delayed")
+    if not account or account["id"] != account_id:
+        raise HTTPException(404, detail="Active delayed account not found.")
+    try:
+        return repo.reset_account(account_id, user.id, idempotency_key, _fingerprint("account-reset", payload.model_dump()), payload.reason, STARTING_EQUITY)
+    except IdempotencyConflict:
+        raise HTTPException(409, detail={"code": "IDEMPOTENCY_CONFLICT"}) from None
+
+
+@admin_router.post("/drills")
+def publish_drill(payload: DrillPublish, user: User = Depends(get_current_user), database=Depends(get_simulator_db)):
+    _require_admin(user)
+    drill = {"id": f"drill_{uuid4().hex}", "version": database.simulator_drills.count_documents({"title": payload.title}) + 1, "state": "published", **payload.model_dump(), "published_at": _now(), "published_by": user.id}
+    database.simulator_drills.insert_one(drill)
+    drill.pop("_id", None)
+    return drill
 
 
 @router.websocket("/ws")
@@ -441,60 +493,24 @@ async def simulator_ws(websocket: WebSocket):
     token = websocket.cookies.get(AUTH_COOKIE_NAME)
     email = decode_access_token(token) if token else None
     session_id = websocket.query_params.get("session_id")
-    if not email or not session_id:
+    user = User.from_doc(application_db.users.find_one({"email": email})) if email else None
+    repo = MongoSimulatorRepository(get_simulator_db())
+    if not user or not session_id:
         await websocket.close(code=1008, reason="Authentication and session_id are required")
         return
-    user = User.from_doc(app_db.users.find_one({"email": email}))
-    session = app_db.simulator_sessions.find_one({"id": session_id, "learner_id": user.id if user else None})
-    if not user or not session or user.subscription_plan not in {"trader", "pro", "elite"}:
+    state = repo.snapshot(session_id)
+    if not state or state["session"].get("learner_id") != user.id:
         await websocket.close(code=1008, reason="Simulator access denied")
         return
     await websocket.accept()
-    last_sequence = int(websocket.query_params.get("after", "0"))
+    last_revision = -1
     try:
-        await websocket.send_json({"type": "snapshot", "sequence": last_sequence, "payload": _snapshot(app_db, session)})
         while True:
-            events = list(app_db.simulator_events.find({"session_id": session_id, "sequence": {"$gt": last_sequence}}, {"_id": 0}).sort("sequence", 1))
-            for event in events:
-                await websocket.send_json(event)
-                last_sequence = event["sequence"]
+            state = repo.snapshot(session_id)
+            revision = state["session"].get("revision", 0)
+            if revision != last_revision:
+                await websocket.send_json({"type": "snapshot", "revision": revision, "payload": _snapshot(state)})
+                last_revision = revision
             await asyncio.sleep(1)
     except WebSocketDisconnect:
         return
-
-
-@router.get("/sessions/{session_id}/review")
-def review(session_id: str, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user); session = _session(db, session_id, user.id)
-    fills = db.simulator_fills.count_documents({"session_id": session_id})
-    journal = db.simulator_journals.find_one({"session_id": session_id}) or {}
-    score = min(100, 40 + (25 if journal.get("plan") else 0) + (20 if journal.get("reflection") else 0) + min(15, fills * 3))
-    return {"session_id": session_id, "score": score, "passed": score >= 80 and not session.get("assisted", False), "assisted": session.get("assisted", False), "dimensions": {"risk_sizing": 40, "plan_adherence": 35 if journal.get("plan") else 0, "execution_discipline": 25 if journal.get("reflection") else 0}, "ai_review": {"available": False, "reason": "A review provider has not been configured."}}
-
-
-@router.get("/drills")
-def drills(user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user)
-    starter = {"id": "risk-sizing-v1", "version": 1, "state": "published", "title": "Position sizing", "title_hi": "पोज़िशन साइज़िंग", "required": False, "instrument_id": "NSE:RELIANCE", "objective": "Keep planned risk within 1% of capital."}
-    return [starter, *list(db.simulator_drills.find({"state": "published"}, {"_id": 0}).sort("published_at", -1))]
-
-
-@admin_router.post("/drills")
-def publish_drill(payload: DrillPublish, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_admin(user)
-    if payload.instrument_id not in {item["id"] for item in _instruments()}:
-        raise HTTPException(422, detail="Unsupported test instrument.")
-    version = db.simulator_drills.count_documents({"title": payload.title}) + 1
-    drill = {"id": f"drill_{uuid4().hex}", "version": version, "state": "published", **payload.model_dump(), "published_at": _now(), "published_by": user.id}
-    db.simulator_drills.insert_one(drill)
-    return {key: value for key, value in drill.items() if key != "_id"}
-
-
-@router.post("/accounts/{account_id}/reset")
-def reset(account_id: str, user: User = Depends(get_current_user), db: Database = Depends(get_db)):
-    _require_access(user)
-    account = db.simulator_accounts.find_one({"id": account_id, "learner_id": user.id, "status": "active"})
-    if not account: raise HTTPException(404, detail="Practice account not found.")
-    db.simulator_accounts.update_one({"id": account_id}, {"$set": {"status": "archived", "archived_at": _now()}})
-    new = _account(db, user.id)
-    return {"archived_account_id": account_id, "account_id": new["id"], "equity": new["equity"]}
