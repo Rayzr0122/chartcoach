@@ -60,6 +60,28 @@ def test_session_uses_a_server_route_and_rejects_unapproved_legacy_provider_sele
     assert blocked.json()["detail"]["code"] == "MARKET_DATA_RIGHTS_REQUIRED"
 
 
+def test_order_validation_requires_the_price_that_defines_each_order_type():
+    client, _, _ = client_and_repo()
+
+    response = client.post("/api/v1/simulator/sessions/anything/orders", json={"side": "buy", "order_type": "limit", "quantity": "1"}, headers={"Idempotency-Key": "invalid"})
+
+    assert response.status_code == 422
+    assert "limit_price" in response.text
+
+
+def test_amending_a_buy_limit_recalculates_its_cash_reservation():
+    client, _, _ = client_and_repo()
+    dataset = fixture_dataset()
+    with patch.object(simulator, "load_dataset", new=AsyncMock(return_value=dataset)), patch.object(simulator, "get_dataset", return_value=dataset):
+        simulator._dataset.cache_clear()
+        session = client.post("/api/v1/simulator/sessions", json={"mode": "replay"}, headers={"Idempotency-Key": "reservation-session"}).json()
+        order = client.post(f"/api/v1/simulator/sessions/{session['id']}/orders", json={"side": "buy", "order_type": "limit", "quantity": "1", "limit_price": "100"}, headers={"Idempotency-Key": "reservation-order"}).json()
+        client.patch(f"/api/v1/simulator/sessions/{session['id']}/orders/{order['id']}", json={"limit_price": "200"}, headers={"Idempotency-Key": "reservation-amend"})
+        state = client.get(f"/api/v1/simulator/sessions/{session['id']}").json()
+
+    assert state["account"]["reserved"] == "200.20"
+
+
 def test_session_pins_long_dataset_and_hides_future_bars():
     client, _, _ = client_and_repo()
     dataset = fixture_dataset()

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
+from app.simulator.market_data import MarketEvent
+
 
 ZERO = Decimal("0")
 
@@ -176,3 +178,56 @@ def process_bar(
     market_value = sum((D(p.get("market_value", 0)) for p in pos.values()), ZERO)
     acct.update(cash=money(cash), reserved=money(max(reserved, ZERO)), realized_pnl=money(realized), unrealized_pnl=money(unrealized), equity=money(cash + market_value), buying_power=money(max(cash - max(reserved, ZERO), ZERO)))
     return BarResult(acct, list(pos.values()), working, fills, ledger)
+
+
+def process_quote_trade(
+    account: dict,
+    positions: list[dict],
+    orders: list[dict],
+    event: MarketEvent,
+    clock: int,
+    fee_bps: Decimal = Decimal("0"),
+    fx_rate: Decimal = Decimal("1"),
+    fx_cost_bps: Decimal = Decimal("0"),
+    slippage_bps: Decimal = Decimal("0"),
+) -> BarResult:
+    """Apply one normalized quote or trade without borrowing liquidity from another event."""
+    event.validate()
+    acct, pos, working, fills, ledger = {**account}, [{**item} for item in positions], [{**item} for item in orders], [], []
+    liquidity = {"buy": event.ask_size if event.kind == "quote" else event.size, "sell": event.bid_size if event.kind == "quote" else event.size}
+    for index, current in enumerate(working):
+        if current.get("status") != "open" or current.get("instrument_id") != event.instrument_id or int(current.get("submitted_clock", -1)) >= clock:
+            continue
+        kind, side = current["order_type"], current["side"]
+        price = event.ask if event.kind == "quote" and side == "buy" else event.bid if event.kind == "quote" else event.price
+        qualifies = (event.kind == "quote" and kind == "market") or (event.kind == "trade" and kind == "limit" and ((side == "buy" and price <= D(current["limit_price"])) or (side == "sell" and price >= D(current["limit_price"]))))
+        if not qualifies:
+            continue
+        requested, available = D(current["quantity"]), liquidity[side] or ZERO
+        quantity = min(requested, available)
+        if quantity <= 0:
+            if event.kind == "quote" and kind == "market":
+                current.update(status="cancelled", rejection_reason="INSUFFICIENT_DISPLAYED_DEPTH")
+            continue
+        reserved = D(current.get("reserved", 0))
+        executable = {**current, "quantity": format(quantity, "f"), "reserved": format(reserved * quantity / requested, "f")}
+        bar = {"time": event.exchange_time, "open": str(price), "high": str(price), "low": str(price), "close": str(price), "volume": str(quantity)}
+        result = process_bar(acct, pos, [executable], bar, clock, fee_bps, event.instrument_id, fx_rate, fx_cost_bps, Decimal("0"), slippage_bps)
+        acct, pos = result.account, result.positions
+        for fill in result.fills:
+            fill["source_event_id"] = event.event_id
+            fill["source"] = event.source
+        fills.extend(result.fills)
+        ledger.extend(result.ledger)
+        liquidity[side] = available - quantity
+        filled = D(current.get("filled_quantity", 0)) + quantity
+        if kind == "market":
+            current.update(result.orders[0], quantity=format(requested, "f"), filled_quantity=format(filled, "f"))
+            if quantity < requested:
+                current.update(status="cancelled", rejection_reason="INSUFFICIENT_DISPLAYED_DEPTH")
+        elif quantity < requested:
+            current.update(quantity=format(requested - quantity, "f"), filled_quantity=format(filled, "f"), reserved=format(reserved - D(executable["reserved"]), "f"))
+        else:
+            current.update(result.orders[0], filled_quantity=format(filled, "f"))
+        working[index] = current
+    return BarResult(acct, pos, working, fills, ledger)

@@ -10,7 +10,7 @@ from functools import lru_cache
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.api.deps import get_current_user
 from app.core.security import AUTH_COOKIE_NAME, decode_access_token
@@ -53,6 +53,14 @@ class OrderCreate(BaseModel):
     take_profit: Decimal | None = Field(default=None, gt=0)
     time_in_force: str = Field(default="GTC", pattern="^(DAY|GTC)$")
     reduce_only: bool = False
+
+    @model_validator(mode="after")
+    def require_trigger_prices(self):
+        if self.order_type in {"limit", "stop_limit"} and self.limit_price is None:
+            raise ValueError("limit_price is required for limit orders")
+        if self.order_type in {"stop_market", "stop_limit"} and self.stop_price is None:
+            raise ValueError("stop_price is required for stop orders")
+        return self
 
 
 class OrderAmend(BaseModel):
@@ -511,7 +519,23 @@ def amend_order(session_id: str, order_id: str, payload: OrderAmend, idempotency
             order["limit_price"] = money(payload.limit_price)
         if payload.stop_price is not None:
             order["stop_price"] = money(payload.stop_price)
-        return order, {"orders": orders, "events": [{"id": f"evt_{uuid4().hex}", "type": "order.amended", "created_at": _now()}]}
+        changes = {"orders": orders}
+        if order["side"] == "buy":
+            session = current["session"]
+            dataset = _dataset(session["dataset_id"])
+            reference = D(order.get("limit_price") or order.get("stop_price") or dataset["bars"][session["clock"] - 1]["close"])
+            fx = _fx_bar(session.get("fx_dataset_id"), dataset["bars"][session["clock"] - 1]["time"])
+            next_reserve = reference * D(order["quantity"]) * (D(fx["close"]) if fx else Decimal("1")) * Decimal("1.001")
+            account = {**current["account"]}
+            available = D(account["cash"]) - D(account["reserved"]) + D(order.get("reserved", 0))
+            if available < next_reserve:
+                raise HTTPException(409, detail={"code": "INSUFFICIENT_BUYING_POWER", "message": "Amendment exceeds available virtual buying power."})
+            account["reserved"] = money(D(account["reserved"]) - D(order.get("reserved", 0)) + next_reserve)
+            account["buying_power"] = money(D(account["cash"]) - D(account["reserved"]))
+            order["reserved"] = money(next_reserve)
+            changes["account"] = account
+        changes["events"] = [{"id": f"evt_{uuid4().hex}", "type": "order.amended", "created_at": _now()}]
+        return order, changes
 
     return _mutation(repo, state, idempotency_key, f"amend:{order_id}", payload.model_dump(mode="json"), operation)
 

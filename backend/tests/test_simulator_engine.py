@@ -1,6 +1,7 @@
 from decimal import Decimal
 
-from app.simulator.engine import process_bar
+from app.simulator.engine import process_bar, process_quote_trade
+from app.simulator.market_data import MarketEvent
 
 
 def account(cash="1000"):
@@ -114,3 +115,32 @@ def test_fx_realized_pnl_reconciles_to_reporting_currency_cost_basis():
 
     assert sold.account["realized_pnl"] == "500.00"
     assert sold.account["cash"] == "100500.00"
+
+
+def test_quote_execution_crosses_the_ask_and_cancels_market_remainder_at_displayed_size():
+    quote = MarketEvent.quote(
+        source="fixture", event_id="q1", instrument_id="NASDAQ:AAPL", venue="NASDAQ",
+        exchange_time=60, received_time=60, bid=Decimal("99"), ask=Decimal("101"),
+        bid_size=Decimal("3"), ask_size=Decimal("1"),
+    )
+
+    result = process_quote_trade(account(), [], [order(instrument_id="NASDAQ:AAPL", quantity="2")], quote, clock=1)
+
+    assert result.fills[0]["price"] == "101.00"
+    assert result.fills[0]["quantity"] == "1"
+    assert result.fills[0]["source_event_id"] == "q1"
+    assert result.orders[0]["status"] == "cancelled"
+    assert result.orders[0]["rejection_reason"] == "INSUFFICIENT_DISPLAYED_DEPTH"
+
+
+def test_resting_limit_only_fills_when_a_qualifying_trade_prints():
+    trade = MarketEvent.trade(
+        source="fixture", event_id="t1", instrument_id="NASDAQ:AAPL", venue="NASDAQ",
+        exchange_time=60, received_time=60, price=Decimal("99"), size=Decimal("1"),
+    )
+
+    result = process_quote_trade(account(), [], [order(instrument_id="NASDAQ:AAPL", quantity="2", order_type="limit", limit_price="100")], trade, clock=1)
+
+    assert result.fills[0]["quantity"] == "1"
+    assert result.orders[0]["status"] == "open"
+    assert result.orders[0]["quantity"] == "1"
