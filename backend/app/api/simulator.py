@@ -27,6 +27,10 @@ router = APIRouter(prefix="/api/v1/simulator", tags=["simulator"])
 admin_router = APIRouter(prefix="/api/v1/admin/simulator", tags=["simulator-admin"])
 PAID_PLANS = {"trader", "pro", "elite"}
 STARTING_EQUITY = "1000000.00"
+EXECUTION_PROFILES = {
+    "cash_equity_dev_v1": {"fee_bps": Decimal("5"), "slippage_bps": Decimal("2"), "spread_bps": Decimal("5")},
+    "crypto_spot_dev_v1": {"fee_bps": Decimal("10"), "slippage_bps": Decimal("5"), "spread_bps": Decimal("0")},
+}
 
 
 class SessionCreate(BaseModel):
@@ -173,18 +177,31 @@ def _instruments() -> list[dict]:
             market = {
                 "NSE": "india_equities", "NASDAQ": "us_equities", "CRYPTO": "crypto", "FX": "fx",
             }.get(venue, "futures")
+            tick_size, quantity_increment = ("0.01", "0.00000001") if asset_class == "spot_crypto" else ("0.0001", "1000") if asset_class == "forex" else ("0.01", "1")
             result.append({
                 "id": f"{venue}:{symbol}", "symbol": symbol, "name": symbol, "venue": venue,
                 "asset_class": asset_class, "quote_currency": currency, "source": "synthetic-test",
                 "replay_source": "alpaca_iex" if polygon else "alpha_vantage" if market == "fx" else "synthetic-test",
                 "delayed_source": "alpaca_iex" if polygon else "synthetic-test",
-                "polygon_supported": polygon, "tick_size": "0.01", "quantity_increment": "1",
+                "polygon_supported": polygon, "tick_size": tick_size, "quantity_increment": quantity_increment,
                 "contract_multiplier": "10" if asset_class == "future" else "1",
                 "market": market, "supported_modes": ["replay"],
                 "data_status": "synthetic_test" if market != "india_equities" else "approved_import_required",
                 "overnight_eligible": market == "india_equities",
             })
     return result
+
+
+def _profile_version(instrument: dict) -> str:
+    return "crypto_spot_dev_v1" if instrument["asset_class"] == "spot_crypto" else "cash_equity_dev_v1"
+
+
+def _validate_order_precision(instrument_id: str, quantity: Decimal, *prices: Decimal | None) -> None:
+    instrument = next(item for item in _instruments() if item["id"] == instrument_id)
+    if quantity % D(instrument["quantity_increment"]):
+        raise HTTPException(422, detail={"code": "INVALID_INCREMENT", "message": "Quantity must match the instrument increment."})
+    if any(price is not None and price % D(instrument["tick_size"]) for price in prices):
+        raise HTTPException(422, detail={"code": "INVALID_INCREMENT", "message": "Price must match the instrument tick size."})
 
 
 def _aggregate(bars: list[dict], bucket_minutes: int) -> list[dict]:
@@ -244,11 +261,12 @@ def advance_state(current: dict, count: int = 1) -> tuple:
     for index in range(session["clock"], end):
         bar = dataset["bars"][index]
         fx = _fx_bar(session.get("fx_dataset_id"), bar["time"])
+        profile = EXECUTION_PROFILES[session.get("profile_version", "cash_equity_dev_v1")]
         result = process_bar(
-            account, positions, orders, bar, index + 1, fee_bps=Decimal("5"),
+            account, positions, orders, bar, index + 1, fee_bps=profile["fee_bps"],
             instrument_id=session["instrument_id"], fx_rate=D(fx["close"]) if fx else Decimal("1"),
             fx_cost_bps=Decimal("5") if fx else Decimal("0"),
-            spread_bps=Decimal("5"), slippage_bps=Decimal("2"),
+            spread_bps=profile["spread_bps"], slippage_bps=profile["slippage_bps"],
         )
         account, positions, orders = result.account, result.positions, result.orders
         fills.extend(result.fills)
@@ -310,7 +328,7 @@ async def create_session(payload: SessionCreate, idempotency_key: str = Header(.
         "state": "paused", "speed": 5, "revision": 1, "coverage": dataset["coverage"],
         "total_bars": len(dataset["bars"]), "data_status": "ready", "created_at": _now(),
         "drill_id": payload.drill_id, "assisted": False, "engine_version": "quote_trade_v1" if payload.mode == "stream" else "candle_replay_v1",
-        "profile_version": "cash_equity_dev_v1", "migration_status": "native",
+        "profile_version": _profile_version(instrument), "migration_status": "native",
     }
     try:
         state = repo.create_session_bundle(user.id, idempotency_key, _fingerprint("session", payload.model_dump(mode="json")), account, session)
@@ -482,6 +500,7 @@ def create_order(session_id: str, payload: OrderCreate, idempotency_key: str = H
         if payload.side == "sell" and not payload.reduce_only:
             raise HTTPException(422, detail={"code": "LONG_ONLY", "message": "This educational cash preset is long-only."})
         session = current["session"]
+        _validate_order_precision(session["instrument_id"], payload.quantity, payload.limit_price, payload.stop_price, payload.stop_loss, payload.take_profit)
         dataset = _dataset(session["dataset_id"])
         if not session["clock"]:
             raise HTTPException(409, detail={"code": "NO_VISIBLE_PRICE"})
@@ -521,6 +540,7 @@ def amend_order(session_id: str, order_id: str, payload: OrderAmend, idempotency
             raise HTTPException(404, detail="Order not found.")
         if order["status"] != "open":
             raise HTTPException(409, detail={"code": "ORDER_NOT_AMENDABLE"})
+        _validate_order_precision(current["session"]["instrument_id"], D(order["quantity"]), payload.limit_price, payload.stop_price)
         if payload.limit_price is not None:
             order["limit_price"] = money(payload.limit_price)
         if payload.stop_price is not None:
