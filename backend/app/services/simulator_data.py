@@ -12,6 +12,7 @@ import os
 import re
 import tempfile
 import time
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -27,6 +28,7 @@ ALLOWED_HISTORY_DAYS = {7, 30, 90, 365}
 POLYGON_HOST = "api.polygon.io"
 ALPACA_DATA_HOST = "data.alpaca.markets"
 ALPHA_VANTAGE_HOST = "www.alphavantage.co"
+COINBASE_EXCHANGE_HOST = "api.exchange.coinbase.com"
 MAX_PAGES = 32
 MAX_BARS = 1_000_000
 INSTRUMENT_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
@@ -309,11 +311,11 @@ async def _alpha_vantage_fx(canonical_id: str, history_days: int) -> dict:
     if not canonical_id.startswith("FX:") or "-" not in canonical_id:
         raise DatasetError("UNSUPPORTED_INSTRUMENT", "Alpha Vantage replay requires an FX instrument")
     base, quote = canonical_id.removeprefix("FX:").split("-", 1)
-    cutoff = (utc_now_seconds() // 60) * 60
+    cutoff = (utc_now_seconds() // 86400) * 86400
     start = cutoff - history_days * 86400
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"https://{ALPHA_VANTAGE_HOST}/query", params={"function": "FX_INTRADAY", "from_symbol": base, "to_symbol": quote, "interval": "1min", "outputsize": "full", "apikey": settings.alpha_vantage_api_key})
+            response = await client.get(f"https://{ALPHA_VANTAGE_HOST}/query", params={"function": "FX_DAILY", "from_symbol": base, "to_symbol": quote, "outputsize": "full", "apikey": settings.alpha_vantage_api_key})
             if response.status_code != 200:
                 raise PolygonDataError("ALPHA_VANTAGE_UNAVAILABLE", "Alpha Vantage FX data is unavailable")
             payload = response.json()
@@ -323,19 +325,62 @@ async def _alpha_vantage_fx(canonical_id: str, history_days: int) -> dict:
         raise PolygonDataError("ALPHA_VANTAGE_UNAVAILABLE", "Alpha Vantage FX data is unavailable") from None
     if payload.get("Note") or payload.get("Information"):
         raise PolygonDataError("ALPHA_VANTAGE_RATE_LIMIT", "Alpha Vantage request limit reached; try again later")
-    series = payload.get("Time Series FX (1min)")
+    series = payload.get("Time Series FX (Daily)")
     if not isinstance(series, dict):
         raise PolygonDataError("ALPHA_VANTAGE_UNAVAILABLE", "Alpha Vantage FX data is unavailable")
     bars = []
     for stamp, raw in series.items():
-        timestamp = int(datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+        timestamp = int(datetime.strptime(stamp, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
         bar = _normalize_bar({"t": timestamp * 1000, "o": raw.get("1. open"), "h": raw.get("2. high"), "l": raw.get("3. low"), "c": raw.get("4. close"), "v": "0"}, cutoff, start, is_fx=True)
         if bar:
             bars.append(bar)
     bars.sort(key=lambda item: item["time"])
     if not bars:
         raise DatasetCoverageError("COVERAGE_INSUFFICIENT", "Alpha Vantage returned no completed one-minute FX bars")
-    return {"source": "alpha_vantage", "instrument_id": canonical_id, "bars": bars, "precision": "1m", "start": bars[0]["time"], "end": bars[-1]["time"], "coverage": {"requested_start": start, "requested_end": cutoff - 60, "actual_start": bars[0]["time"], "actual_end": bars[-1]["time"], "cutoff_timestamp": cutoff, "test_only": False}}
+    return {"source": "alpha_vantage", "instrument_id": canonical_id, "bars": bars, "precision": "1d", "start": bars[0]["time"], "end": bars[-1]["time"], "coverage": {"requested_start": start, "requested_end": cutoff - 86400, "actual_start": bars[0]["time"], "actual_end": bars[-1]["time"], "cutoff_timestamp": cutoff, "test_only": False, "fidelity": "daily_fx_replay"}}
+
+
+async def _coinbase(canonical_id: str, history_days: int) -> dict:
+    if not canonical_id.startswith("CRYPTO:"):
+        raise DatasetError("UNSUPPORTED_INSTRUMENT", "Coinbase replay requires a crypto instrument")
+    product = canonical_id.removeprefix("CRYPTO:")
+    cutoff = (utc_now_seconds() // 60) * 60
+    start = cutoff - history_days * 86400
+    bars = {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            async def fetch(window_start: int, window_end: int) -> list:
+                response = await client.get(f"https://{COINBASE_EXCHANGE_HOST}/products/{product}/candles", params={"granularity": 60, "start": datetime.fromtimestamp(window_start, timezone.utc).isoformat(), "end": datetime.fromtimestamp(window_end, timezone.utc).isoformat()})
+                if response.status_code == 429:
+                    raise PolygonDataError("COINBASE_RATE_LIMIT", "Coinbase rate limit reached; try again later")
+                if response.status_code != 200:
+                    raise PolygonDataError("COINBASE_UNAVAILABLE", "Coinbase historical data is unavailable")
+                payload = response.json()
+                if not isinstance(payload, list):
+                    raise PolygonDataError("COINBASE_UNAVAILABLE", "Coinbase historical data is unavailable")
+                return payload
+
+            windows = [(window_start, min(window_start + 300 * 60, cutoff)) for window_start in range(start, cutoff, 300 * 60)]
+            first = await fetch(*windows[0])
+            pages = [first]
+            if len(first) >= 300:
+                for offset in range(1, len(windows), 4):
+                    pages.extend(await asyncio.gather(*(fetch(*window) for window in windows[offset:offset + 4])))
+            for payload in pages:
+                for raw in payload:
+                    if not isinstance(raw, list) or len(raw) != 6:
+                        raise DatasetError("INVALID_BAR", "Coinbase returned an invalid candle")
+                    bar = _normalize_bar({"t": raw[0] * 1000, "l": raw[1], "h": raw[2], "o": raw[3], "c": raw[4], "v": raw[5]}, cutoff, start)
+                    if bar:
+                        bars[bar["time"]] = bar
+    except DatasetError:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError, KeyError):
+        raise PolygonDataError("COINBASE_UNAVAILABLE", "Coinbase historical data is unavailable") from None
+    result = [bars[timestamp] for timestamp in sorted(bars)]
+    if not result:
+        raise DatasetCoverageError("COVERAGE_INSUFFICIENT", "Coinbase returned no completed one-minute candles")
+    return {"source": "coinbase", "instrument_id": canonical_id, "bars": result, "precision": "1m", "start": result[0]["time"], "end": result[-1]["time"], "coverage": {"requested_start": start, "requested_end": cutoff - 60, "actual_start": result[0]["time"], "actual_end": result[-1]["time"], "cutoff_timestamp": cutoff, "test_only": False}}
 
 
 async def load_dataset(instrument_id: str, source: str, history_days: int = 30) -> dict:
@@ -352,6 +397,8 @@ async def load_dataset(instrument_id: str, source: str, history_days: int = 30) 
         return _store(await _alpaca_iex(canonical_id, provider_symbol, history_days))
     if source == "alpha_vantage":
         return _store(await _alpha_vantage_fx(canonical_id, history_days))
+    if source == "coinbase":
+        return _store(await _coinbase(canonical_id, history_days))
     raise DatasetError("INVALID_SOURCE", "Dataset source is not supported")
 
 

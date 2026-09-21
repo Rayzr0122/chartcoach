@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     alpaca_api_key: str = ""
     alpaca_api_secret: str = ""
     alpha_vantage_api_key: str = ""
+    simulator_alpaca_usage_rights_record_id: str = ""
+    simulator_alpha_vantage_usage_rights_record_id: str = ""
+    simulator_coinbase_usage_rights_record_id: str = ""
+    simulator_imported_data_approval_id: str = ""
 
     # Whether the login cookie requires HTTPS. Keep False for local dev over
     # plain http://, but this MUST be True in any real deployment.

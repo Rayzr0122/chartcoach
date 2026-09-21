@@ -8,6 +8,7 @@ from app.simulator.market_data import (
     MarketDataError,
     ProviderRegistry,
 )
+from app.config import settings
 
 
 def test_registry_exposes_provider_neutral_capabilities_without_enabling_unapproved_routes():
@@ -20,7 +21,7 @@ def test_registry_exposes_provider_neutral_capabilities_without_enabling_unappro
     assert us_replay["provider"] == "alpaca_iex"
     assert us_replay["enabled"] is False
     assert india_replay["provider"] == "imported"
-    assert india_replay["enabled"] is True
+    assert india_replay["enabled"] is False
 
 
 def test_registry_rejects_a_fallback_with_different_venue_or_event_semantics():
@@ -37,6 +38,13 @@ def test_registry_rejects_a_fallback_with_different_venue_or_event_semantics():
 
     with pytest.raises(MarketDataError, match="compatible"):
         registry.activate("us_equities", "stream", "primary", "development")
+
+
+def test_registry_selects_only_routes_with_an_explicit_usage_rights_record(monkeypatch):
+    monkeypatch.setattr(settings, "simulator_alpaca_usage_rights_record_id", "rights-123")
+    registry = ProviderRegistry.default()
+
+    assert registry.select("us_equities", "replay", "development").provider == "alpaca_iex"
 
 
 def test_normalized_event_rejects_crossed_or_out_of_order_quotes():

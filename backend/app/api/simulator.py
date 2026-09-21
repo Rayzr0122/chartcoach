@@ -216,7 +216,13 @@ def _fx_bar(dataset_id: str | None, timestamp: int) -> dict | None:
 
 def _session_source(payload: SessionCreate, instrument: dict) -> str:
     """Resolve legacy source input through a server-owned rights gate."""
-    if payload.source in (None, "synthetic-test"):
+    mode = "stream" if payload.mode in {"stream", "delayed"} else "replay"
+    if payload.source is None:
+        try:
+            return _provider_registry().select(instrument["market"], mode, "development").provider
+        except MarketDataError:
+            raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "No approved market-data route is active for this market."}) from None
+    if payload.source == "synthetic-test":
         if payload.mode == "stream":
             raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "No approved streaming provider is active for this market."})
         return "synthetic-test"

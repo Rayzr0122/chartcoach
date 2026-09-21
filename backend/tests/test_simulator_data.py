@@ -96,16 +96,27 @@ class TestSimulatorData(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dataset["bars"][0]["close"], "101")
         self.assertEqual(client.calls[0][1]["headers"]["APCA-API-KEY-ID"], "test-key")
 
-    async def test_alpha_vantage_maps_fx_intraday_bars_and_rejects_throttling(self):
+    async def test_alpha_vantage_maps_daily_fx_bars_for_low_fidelity_replay(self):
         now = 1_700_000_040
-        payload = {"Time Series FX (1min)": {"2023-11-14 22:00:00": {"1. open": "83", "2. high": "84", "3. low": "82", "4. close": "83.5"}}}
+        payload = {"Time Series FX (Daily)": {"2023-11-13": {"1. open": "83", "2. high": "84", "3. low": "82", "4. close": "83.5"}}}
         client = FakeClient([FakeResponse(200, payload)])
         with patch.object(simulator_data, "utc_now_seconds", return_value=now), patch.object(simulator_data.httpx, "AsyncClient", return_value=client), patch.object(simulator_data.settings, "alpha_vantage_api_key", "test-key"):
             dataset = await simulator_data.load_dataset("FX:USD-INR", "alpha_vantage", history_days=7)
 
         self.assertEqual(dataset["source"], "alpha_vantage")
         self.assertEqual(dataset["bars"][0]["volume"], "0")
-        self.assertEqual(client.calls[0][1]["params"]["function"], "FX_INTRADAY")
+        self.assertEqual(dataset["precision"], "1d")
+        self.assertEqual(client.calls[0][1]["params"]["function"], "FX_DAILY")
+
+    async def test_coinbase_public_candles_map_to_an_immutable_crypto_replay_dataset(self):
+        now = 1_700_000_040
+        client = FakeClient([FakeResponse(200, [[1_699_999_080, 99, 102, 100, 101, 12]])])
+        with patch.object(simulator_data, "utc_now_seconds", return_value=now), patch.object(simulator_data.httpx, "AsyncClient", return_value=client):
+            dataset = await simulator_data.load_dataset("CRYPTO:BTC-USD", "coinbase", history_days=7)
+
+        self.assertEqual(dataset["source"], "coinbase")
+        self.assertEqual(dataset["bars"][0]["open"], "100")
+        self.assertIn("/products/BTC-USD/candles", client.calls[0][0])
 
     async def test_polygon_errors_are_typed_safe_and_have_no_synthetic_fallback(self):
         for status, code in ((403, "POLYGON_FORBIDDEN"), (429, "POLYGON_RATE_LIMIT")):

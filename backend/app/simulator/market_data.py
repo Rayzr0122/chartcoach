@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Protocol
 
+from app.config import settings
+
 
 class MarketDataError(ValueError):
     """A safe validation or routing failure for market data."""
@@ -119,11 +121,12 @@ class ProviderRegistry:
             "coinbase": StaticAdapter("coinbase", ("quote", "trade", "bars")),
         }
         for route in (
-            AdapterRoute("india_equities", "replay", "imported", "NSE", ("bar",), 0, "approved-import"),
-            AdapterRoute("us_equities", "replay", "alpaca_iex", "IEX", ("bar",), 0, None),
-            AdapterRoute("us_equities", "stream", "alpaca_iex", "IEX", ("quote", "trade"), 0, None),
-            AdapterRoute("fx", "replay", "alpha_vantage", "OTC", ("bar",), 0, None),
-            AdapterRoute("crypto", "stream", "coinbase", "COINBASE", ("quote", "trade"), 0, None),
+            AdapterRoute("india_equities", "replay", "imported", "NSE", ("bar",), 0, settings.simulator_imported_data_approval_id or None),
+            AdapterRoute("us_equities", "replay", "alpaca_iex", "IEX", ("bar",), 0, settings.simulator_alpaca_usage_rights_record_id or None),
+            AdapterRoute("us_equities", "stream", "alpaca_iex", "IEX", ("quote", "trade"), 0, settings.simulator_alpaca_usage_rights_record_id or None),
+            AdapterRoute("fx", "replay", "alpha_vantage", "OTC", ("bar",), 0, settings.simulator_alpha_vantage_usage_rights_record_id or None),
+            AdapterRoute("crypto", "stream", "coinbase", "COINBASE", ("quote", "trade"), 0, settings.simulator_coinbase_usage_rights_record_id or None),
+            AdapterRoute("crypto", "replay", "coinbase", "COINBASE", ("bar",), 0, settings.simulator_coinbase_usage_rights_record_id or None),
             AdapterRoute("all", "replay", "synthetic-test", "SIM", ("bar",), 0, "internal-fixture"),
         ):
             registry.register_route(route)
@@ -158,3 +161,10 @@ class ProviderRegistry:
             if not fallback.compatible_with(route):
                 raise MarketDataError("fallback route is not compatible")
         return route
+
+    def select(self, market: str, mode: str, environment: str) -> AdapterRoute:
+        for candidate_market in (market, "all"):
+            route = next((item for item in self.routes if item.market == candidate_market and item.mode == mode and item.fallback_for is None and item.rights_approval_id and environment in item.environments), None)
+            if route:
+                return route
+        raise MarketDataError("no approved provider route")
