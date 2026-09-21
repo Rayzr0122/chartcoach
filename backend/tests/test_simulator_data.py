@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+import mongomock
 
 from app.services import simulator_data
 
@@ -49,9 +50,12 @@ class TestSimulatorData(unittest.IsolatedAsyncioTestCase):
         self.dataset_root = Path(self.tempdir.name) / "datasets"
         self.root_patch = patch.object(simulator_data, "DATASET_ROOT", self.dataset_root)
         self.root_patch.start()
+        self.store_patch = patch.object(simulator_data.settings, "simulator_dataset_store", "file")
+        self.store_patch.start()
 
     def tearDown(self):
         self.root_patch.stop()
+        self.store_patch.stop()
         self.tempdir.cleanup()
 
     async def test_synthetic_dataset_is_reproducible_and_explicitly_test_only(self):
@@ -247,3 +251,20 @@ class TestSimulatorData(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(simulator_data.DatasetError) as raised:
             await simulator_data.load_dataset("LSE:VOD", "polygon", history_days=7)
         self.assertEqual(raised.exception.code, "UNSUPPORTED_VENUE")
+
+
+class TestMongoSimulatorDatasets(unittest.TestCase):
+    def test_chunks_and_manifest_are_content_addressed_and_verified(self):
+        database = mongomock.MongoClient().chartcoach_simulator
+        dataset = {"source": "fixture", "instrument_id": "TEST", "precision": "1m", "start": 1, "end": 3, "coverage": {"test_only": True}, "bars": [
+            {"time": 1, "open": "1", "high": "1", "low": "1", "close": "1", "volume": "1"},
+            {"time": 2, "open": "2", "high": "2", "low": "2", "close": "2", "volume": "1"},
+            {"time": 3, "open": "3", "high": "3", "low": "3", "close": "3", "volume": "1"},
+        ]}
+        with patch.object(simulator_data.settings, "simulator_dataset_store", "mongo"), patch.object(simulator_data, "get_simulator_db", return_value=database), patch.object(simulator_data, "DATASET_CHUNK_SIZE", 2):
+            stored = simulator_data._store(dataset)
+            self.assertEqual(simulator_data.get_dataset(stored["id"]), stored)
+            self.assertEqual(database.simulator_dataset_chunks.count_documents({"dataset_id": stored["id"]}), 2)
+            database.simulator_dataset_chunks.update_one({"dataset_id": stored["id"], "index": 0}, {"$set": {"bars.0.close": "99"}})
+            with self.assertRaisesRegex(simulator_data.DatasetError, "DATASET_TAMPERED"):
+                simulator_data.get_dataset(stored["id"])

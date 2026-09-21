@@ -34,8 +34,10 @@ export default function TradePage() {
     [seekDraft, setSeekDraft] = useState<number | null>(null),
     [pending, setPending] = useState(false),
     [loading, setLoading] = useState(true),
+    [streamRetry, setStreamRetry] = useState(0),
     [error, setError] = useState<unknown>();
   const controller = useRef(uid()),
+    eventCursor = useRef(0),
     instrument = useMemo(
       () =>
         instruments.find((x) => x.id === (session?.instrument_id || selected)),
@@ -78,21 +80,32 @@ export default function TradePage() {
       .finally(() => setLoading(false));
   }, [refresh]);
   useEffect(() => {
+    eventCursor.current = 0;
+  }, [session?.id]);
+  useEffect(() => {
     if (!session) return;
+    let closed = false;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${protocol}//${location.hostname}:8000/api/v1/simulator/ws?session_id=${encodeURIComponent(session.id)}`);
+    const socket = new WebSocket(`${protocol}//${location.hostname}:8000/api/v1/simulator/ws?session_id=${encodeURIComponent(session.id)}&cursor=${eventCursor.current}`);
     socket.onmessage = (message) => {
       try {
-        const update = JSON.parse(message.data) as { payload?: SimulatorSession };
+        const update = JSON.parse(message.data) as { cursor?: number; payload?: SimulatorSession };
         if (!update.payload) return;
+        if (typeof update.cursor === "number") eventCursor.current = update.cursor;
         setSession(update.payload);
         void simulatorApi.candles(update.payload.id, { limit: 700, timeframe }).then(setCandles).catch(setError);
       } catch {
         setError(new Error("The simulator event stream returned an invalid update."));
       }
     };
-    return () => socket.close();
-  }, [session?.id, timeframe]);
+    socket.onclose = () => {
+      if (!closed) window.setTimeout(() => setStreamRetry((value) => value + 1), 1000);
+    };
+    return () => {
+      closed = true;
+      socket.close();
+    };
+  }, [session?.id, timeframe, streamRetry]);
   useEffect(() => {
     if (!session || session.state !== "playing" || session.mode !== "replay")
       return;

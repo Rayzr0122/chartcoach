@@ -80,6 +80,10 @@ class InMemorySimulatorRepository:
     def events_after(self, session_id: str, sequence: int, limit: int = 100) -> list[dict]:
         return [copy.deepcopy(event) for event in self.outbox if event["session_id"] == session_id and event.get("sequence", 0) > sequence][:limit]
 
+    def event_bounds(self, session_id: str) -> tuple[int | None, int]:
+        values = [event.get("sequence", 0) for event in self.outbox if event["session_id"] == session_id]
+        return (min(values), max(values, default=0)) if values else (None, 0)
+
     def snapshot(self, session_id: str) -> dict | None:
         session = self.get_session(session_id)
         if not session:
@@ -154,6 +158,7 @@ class MongoSimulatorRepository:
         self.db.simulator_accounts.create_index([("learner_id", 1), ("mode", 1), ("status", 1)])
         self.db.simulator_sessions.create_index("id", unique=True)
         self.db.simulator_idempotency.create_index([("session_id", 1), ("key", 1)], unique=True)
+        self.db.simulator_outbox.create_index([("session_id", 1), ("sequence", 1)], unique=True)
         for name in ("orders", "positions", "fills", "ledger"):
             self.db[f"simulator_{name}"].create_index("id", unique=True, sparse=True)
 
@@ -211,6 +216,11 @@ class MongoSimulatorRepository:
 
     def events_after(self, session_id: str, sequence: int, limit: int = 100) -> list[dict]:
         return list(self.db.simulator_outbox.find({"session_id": session_id, "sequence": {"$gt": sequence}}, {"_id": 0}).sort("sequence", 1).limit(limit))
+
+    def event_bounds(self, session_id: str) -> tuple[int | None, int]:
+        first = self.db.simulator_outbox.find_one({"session_id": session_id}, {"_id": 0, "sequence": 1}, sort=[("sequence", 1)])
+        last = self.db.simulator_outbox.find_one({"session_id": session_id}, {"_id": 0, "sequence": 1}, sort=[("sequence", -1)])
+        return (first["sequence"] if first else None, last["sequence"] if last else 0)
 
     def snapshot(self, session_id: str, mongo_session=None) -> dict | None:
         session = self.db.simulator_sessions.find_one({"id": session_id}, {"_id": 0}, session=mongo_session)

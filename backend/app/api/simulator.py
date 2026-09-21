@@ -653,8 +653,10 @@ async def simulator_ws(websocket: WebSocket):
         return
     await websocket.accept()
     try:
-        if cursor == 0:
-            await websocket.send_json({"type": "snapshot", "sequence": 0, "revision": state["session"].get("revision", 0), "cursor": 0, "payload": _snapshot(state)})
+        oldest, latest = repo.event_bounds(session_id)
+        if cursor == 0 or (oldest is not None and cursor < oldest - 1):
+            cursor = latest
+            await websocket.send_json({"type": "snapshot", "sequence": cursor, "revision": state["session"].get("revision", 0), "cursor": cursor, "payload": _snapshot(state)})
         while True:
             events = repo.events_after(session_id, cursor)
             for event in events:

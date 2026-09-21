@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     simulator_database_url: str = "mongodb://127.0.0.1:27019/?replicaSet=simulator-rs&directConnection=true"
     simulator_database_name: str = "chartcoach_simulator"
     simulator_redis_url: str = "redis://localhost:6380/0"
+    simulator_dataset_store: str = "mongo"
 
     # Secret key used to sign login tokens (JWT)
     jwt_secret_key: str

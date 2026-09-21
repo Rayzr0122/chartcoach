@@ -28,6 +28,7 @@ def test_outbox_events_are_resumable_by_session_sequence():
 
     assert [event["sequence"] for event in repo.events_after("s1", 0)] == [1, 2]
     assert [event["id"] for event in repo.events_after("s1", 1)] == ["evt-2"]
+    assert repo.event_bounds("s1") == (1, 2)
 
 
 def test_sessions_on_same_account_share_positions_and_account_revision():

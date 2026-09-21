@@ -1,8 +1,4 @@
-"""Bounded, immutable one-minute datasets for simulator replays.
-
-Polygon is the only production source in this boundary. ``synthetic-test`` is
-deterministic fixture data and is intentionally marked test-only in metadata.
-"""
+"""Provider adapters and immutable datasets for simulator replays."""
 
 from __future__ import annotations
 
@@ -21,6 +17,7 @@ from urllib.parse import parse_qsl, urlsplit, urlunsplit
 import httpx
 
 from app.config import settings
+from app.simulator.database import get_simulator_db
 
 
 DATASET_ROOT = Path(settings.media_root).resolve() / "datasets"
@@ -31,6 +28,7 @@ ALPHA_VANTAGE_HOST = "www.alphavantage.co"
 COINBASE_EXCHANGE_HOST = "api.exchange.coinbase.com"
 MAX_PAGES = 32
 MAX_BARS = 1_000_000
+DATASET_CHUNK_SIZE = 5_000
 INSTRUMENT_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 CANONICAL_INSTRUMENT_RE = re.compile(r"^[A-Z][A-Z0-9 _-]{0,15}:[A-Z0-9._-]{1,32}$")
 SUPPORTED_POLYGON_VENUES = {"NASDAQ", "NYSE", "AMEX", "NYSEARCA"}
@@ -107,7 +105,7 @@ def _canonical_dataset(dataset: dict) -> bytes:
     return json.dumps(dataset, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _store(dataset: dict) -> dict:
+def _store_file(dataset: dict) -> dict:
     """Persist content once and return the immutable dataset with its id."""
     content = _canonical_dataset(dataset)
     dataset_id = f"dataset_{hashlib.sha256(content).hexdigest()}"
@@ -157,7 +155,7 @@ def _read_verified(path: Path, dataset_id: str) -> dict:
         raise DatasetError("DATASET_TAMPERED", "Dataset content failed integrity verification") from None
 
 
-def get_dataset(dataset_id: str) -> dict:
+def _get_dataset_file(dataset_id: str) -> dict:
     """Read a pinned dataset by id; stored files are never modified by reads."""
 
     if not re.fullmatch(r"dataset_[0-9a-f]{64}", dataset_id):
@@ -166,6 +164,81 @@ def get_dataset(dataset_id: str) -> dict:
     if not path.is_file():
         raise DatasetError("DATASET_NOT_FOUND", "Dataset was not found")
     return _read_verified(path, dataset_id)
+
+
+def _manifest_content(dataset: dict, chunks: list[dict]) -> dict:
+    """Return the hashable manifest without its content address or raw bars."""
+
+    return {
+        **{key: value for key, value in dataset.items() if key not in {"id", "bars"}},
+        "chunk_count": len(chunks),
+        "bar_count": len(dataset["bars"]),
+        "chunk_hashes": [chunk["hash"] for chunk in chunks],
+        "manifest_version": 1,
+    }
+
+
+def _store_mongo(dataset: dict) -> dict:
+    """Persist a replay snapshot as immutable, independently verifiable chunks."""
+
+    chunks = []
+    for index in range(0, len(dataset["bars"]), DATASET_CHUNK_SIZE):
+        bars = dataset["bars"][index:index + DATASET_CHUNK_SIZE]
+        chunks.append({"index": index // DATASET_CHUNK_SIZE, "bars": bars, "hash": hashlib.sha256(_canonical_dataset(bars)).hexdigest()})
+    manifest = _manifest_content(dataset, chunks)
+    dataset_id = f"dataset_{hashlib.sha256(_canonical_dataset(manifest)).hexdigest()}"
+    database = get_simulator_db()
+    database.simulator_dataset_manifests.update_one(
+        {"id": dataset_id},
+        {"$setOnInsert": {"id": dataset_id, **manifest}},
+        upsert=True,
+    )
+    for chunk in chunks:
+        database.simulator_dataset_chunks.update_one(
+            {"dataset_id": dataset_id, "index": chunk["index"]},
+            {"$setOnInsert": {"dataset_id": dataset_id, **chunk}},
+            upsert=True,
+        )
+    return {"id": dataset_id, **dataset}
+
+
+def _get_dataset_mongo(dataset_id: str) -> dict:
+    database = get_simulator_db()
+    manifest = database.simulator_dataset_manifests.find_one({"id": dataset_id}, {"_id": 0})
+    if not manifest:
+        raise DatasetError("DATASET_NOT_FOUND", "Dataset was not found")
+    chunks = list(database.simulator_dataset_chunks.find({"dataset_id": dataset_id}, {"_id": 0}).sort("index", 1))
+    expected = list(range(manifest.get("chunk_count", -1)))
+    if [chunk.get("index") for chunk in chunks] != expected or len(chunks) != manifest.get("chunk_count"):
+        raise DatasetError("DATASET_TAMPERED", "Dataset chunks failed integrity verification")
+    if any(hashlib.sha256(_canonical_dataset(chunk.get("bars"))).hexdigest() != chunk.get("hash") for chunk in chunks):
+        raise DatasetError("DATASET_TAMPERED", "Dataset chunks failed integrity verification")
+    actual_manifest = {key: value for key, value in manifest.items() if key not in {"id", "_id"}}
+    actual_id = f"dataset_{hashlib.sha256(_canonical_dataset(actual_manifest)).hexdigest()}"
+    if actual_id != dataset_id:
+        raise DatasetError("DATASET_TAMPERED", "Dataset manifest failed integrity verification")
+    bars = [bar for chunk in chunks for bar in chunk["bars"]]
+    if len(bars) != manifest.get("bar_count"):
+        raise DatasetError("DATASET_TAMPERED", "Dataset chunks failed integrity verification")
+    return {"id": dataset_id, **{key: value for key, value in manifest.items() if key not in {"id", "chunk_count", "bar_count", "chunk_hashes", "manifest_version"}}, "bars": bars}
+
+
+def _store(dataset: dict) -> dict:
+    """Use MongoDB in runtime; local files are an explicit test-only adapter."""
+
+    if settings.simulator_dataset_store == "file":
+        return _store_file(dataset)
+    return _store_mongo(dataset)
+
+
+def get_dataset(dataset_id: str) -> dict:
+    """Read one immutable dataset and verify its manifest and every chunk."""
+
+    if not re.fullmatch(r"dataset_[0-9a-f]{64}", dataset_id):
+        raise DatasetError("DATASET_NOT_FOUND", "Dataset was not found")
+    if settings.simulator_dataset_store == "file":
+        return _get_dataset_file(dataset_id)
+    return _get_dataset_mongo(dataset_id)
 
 
 def _synthetic(instrument_id: str, history_days: int) -> dict:
@@ -389,17 +462,24 @@ async def load_dataset(instrument_id: str, source: str, history_days: int = 30) 
     if history_days not in ALLOWED_HISTORY_DAYS:
         raise DatasetError("INVALID_HISTORY_DAYS", "History must be 7, 30, 90, or 365 days")
     canonical_id, provider_symbol, is_fx = _instrument_parts(instrument_id, source)
-    if source == "synthetic-test":
-        return _store(_synthetic(canonical_id, history_days))
-    if source == "polygon":
-        return _store(await _polygon(canonical_id, provider_symbol, history_days, is_fx))
-    if source == "alpaca_iex":
-        return _store(await _alpaca_iex(canonical_id, provider_symbol, history_days))
-    if source == "alpha_vantage":
-        return _store(await _alpha_vantage_fx(canonical_id, history_days))
-    if source == "coinbase":
-        return _store(await _coinbase(canonical_id, history_days))
-    raise DatasetError("INVALID_SOURCE", "Dataset source is not supported")
+    loaders = {
+        "synthetic-test": lambda: _synthetic(canonical_id, history_days),
+        "polygon": lambda: _polygon(canonical_id, provider_symbol, history_days, is_fx),
+        "alpaca_iex": lambda: _alpaca_iex(canonical_id, provider_symbol, history_days),
+        "alpha_vantage": lambda: _alpha_vantage_fx(canonical_id, history_days),
+        "coinbase": lambda: _coinbase(canonical_id, history_days),
+    }
+    loader = loaders.get(source)
+    if not loader:
+        raise DatasetError("INVALID_SOURCE", "Dataset source is not supported")
+    loaded = loader()
+    dataset = await loaded if hasattr(loaded, "__await__") else loaded
+    approvals = {
+        "alpaca_iex": settings.simulator_alpaca_usage_rights_record_id,
+        "alpha_vantage": settings.simulator_alpha_vantage_usage_rights_record_id,
+        "coinbase": settings.simulator_coinbase_usage_rights_record_id,
+    }
+    return _store({**dataset, "import_tool_version": 2, "source_approval_id": approvals.get(source) or None, "corrections": []})
 
 
 async def refresh_dataset(instrument_id: str, source: str, history_days: int = 30) -> dict:
