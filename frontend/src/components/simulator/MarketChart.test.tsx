@@ -4,7 +4,7 @@ import { MarketChart } from "./MarketChart";
 
 const init = vi.fn();
 vi.mock("klinecharts", () => ({ init: (...args: unknown[]) => init(...args), dispose: vi.fn() }));
-const fixture = () => ({ setSymbol: vi.fn(), setPeriod: vi.fn(), setDataLoader: vi.fn(), createIndicator: vi.fn(), getIndicators: () => [], removeIndicator: vi.fn(), resetData: vi.fn(), createOverlay: vi.fn() });
+const fixture = () => ({ setSymbol: vi.fn(), setPeriod: vi.fn(), setDataLoader: vi.fn(), createIndicator: vi.fn(), getIndicators: () => [], getOverlays: () => [], removeIndicator: vi.fn(), removeOverlay: vi.fn(), resetData: vi.fn(), createOverlay: vi.fn() });
 
 describe("MarketChart", () => {
   beforeEach(() => { init.mockReset(); init.mockImplementation(fixture); });

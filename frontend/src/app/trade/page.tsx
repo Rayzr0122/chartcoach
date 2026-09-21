@@ -12,6 +12,7 @@ import {
   simulatorErrorPresentation,
   type Candle,
   type Instrument,
+  type ChartLayout,
   type Journal,
   type Review,
   type SimulatorSession,
@@ -28,6 +29,8 @@ export default function TradePage() {
     [candles, setCandles] = useState<Candle[]>([]),
     [timeframe, setTimeframe] = useState<Timeframe>("1m"),
     [overlays, setOverlays] = useState<Overlay[]>(["ema"]),
+    [chartLayout, setChartLayout] = useState<ChartLayout>({ instrument_id: "", timeframe: "1m", revision: 0, drawings: [] }),
+    [drawingTool, setDrawingTool] = useState<string>(),
     [journal, setJournal] = useState<Journal>({ plan: "", reflection: "" }),
     [review, setReview] = useState<Review>(),
     [query, setQuery] = useState(""),
@@ -106,6 +109,16 @@ export default function TradePage() {
       socket.close();
     };
   }, [session?.id, timeframe, streamRetry]);
+  useEffect(() => {
+    if (!session) return;
+    simulatorApi.chartLayout(session.instrument_id, timeframe).then(setChartLayout).catch(setError);
+  }, [session?.id, session?.instrument_id, timeframe]);
+  const saveDrawings = useCallback((drawings: Array<Record<string, unknown>>) => {
+    if (!session) return;
+    const next = { ...chartLayout, drawings };
+    setChartLayout(next);
+    void simulatorApi.saveChartLayout(session.instrument_id, timeframe, next).then(setChartLayout).catch(setError);
+  }, [session, timeframe, chartLayout]);
   useEffect(() => {
     if (!session || session.state !== "playing" || session.mode !== "replay")
       return;
@@ -395,6 +408,9 @@ export default function TradePage() {
                 </button>
               ))}
             </div>
+            <div>
+              {[ ["horizontalStraightLine", "Line"], ["segment", "Trend"], ["fibonacciLine", "Fib"] ].map(([tool, label]) => <button key={tool} onClick={() => setDrawingTool(`${tool}#${uid()}`)}>{label}</button>)}
+            </div>
             <small>{candles.length} bars</small>
           </nav>
           <div className="chart">
@@ -402,6 +418,9 @@ export default function TradePage() {
               <MarketChart
                 candles={candles}
                 overlays={overlays}
+                drawings={chartLayout.drawings as Array<{ name: string; points: Array<{ timestamp?: number; value?: number }> }>}
+                drawingTool={drawingTool}
+                onDrawingsChange={saveDrawings}
                 onLoadOlder={older}
               />
             ) : (
