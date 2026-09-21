@@ -23,6 +23,7 @@
     "clsx": "^2.1.1",
     "cn": "^0.2.6",
     "d3-hierarchy": "^3.1.2",
+    "klinecharts": "^10.0.3",
     "lightweight-charts": "^5.2.1",
     "lucide-react": "^1.42.0",
     "motion": "^13.2.0",

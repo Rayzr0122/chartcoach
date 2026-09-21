@@ -1,161 +1,44 @@
 "use client";
 import { useEffect, useRef } from "react";
-import {
-  CandlestickSeries,
-  ColorType,
-  HistogramSeries,
-  LineSeries,
-  createChart,
-  type IChartApi,
-  type ISeriesApi,
-  type LogicalRange,
-  type UTCTimestamp,
-} from "lightweight-charts";
-import {
-  calculateEMA,
-  calculateSMA,
-  calculateVWAP,
-  type Candle,
-} from "@/lib/simulator";
+import type { Chart, KLineData } from "klinecharts";
+import { type Candle } from "@/lib/simulator";
+
 export type Overlay = "sma" | "ema" | "vwap";
-const time = (value: number) => value as UTCTimestamp;
-export function MarketChart({
-  candles,
-  overlays,
-  horizontalLine,
-  onLoadOlder,
-}: {
-  candles: Candle[];
-  overlays: Overlay[];
-  horizontalLine?: number;
-  onLoadOlder: () => void;
-}) {
+const asBars = (candles: Candle[]): KLineData[] => candles.map((item) => ({ timestamp: item.time * 1000, open: Number(item.open), high: Number(item.high), low: Number(item.low), close: Number(item.close), volume: Number(item.volume) }));
+
+export function MarketChart({ candles, overlays, horizontalLine, onLoadOlder }: { candles: Candle[]; overlays: Overlay[]; horizontalLine?: number; onLoadOlder: () => void }) {
   const container = useRef<HTMLDivElement>(null);
-  const chart = useRef<IChartApi | null>(null);
-  const candleSeries = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const volumeSeries = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const lines = useRef<ISeriesApi<"Line">[]>([]);
-  const range = useRef<LogicalRange | null>(null);
-  const loading = useRef(false);
+  const chart = useRef<Chart | null>(null);
+  const bars = useRef<KLineData[]>([]);
   const loadOlder = useRef(onLoadOlder);
-  useEffect(() => {
-    loadOlder.current = onLoadOlder;
-  }, [onLoadOlder]);
+  useEffect(() => { loadOlder.current = onLoadOlder; }, [onLoadOlder]);
   useEffect(() => {
     if (!container.current) return;
-    const instance = createChart(container.current, {
-      autoSize: true,
-      layout: {
-        background: { type: ColorType.Solid, color: "#090d14" },
-        textColor: "#8c98ab",
-        fontSize: 11,
-      },
-      grid: {
-        vertLines: { color: "#18202c" },
-        horzLines: { color: "#18202c" },
-      },
-      rightPriceScale: { borderColor: "#263041" },
-      timeScale: {
-        borderColor: "#263041",
-        timeVisible: true,
-        secondsVisible: false,
-      },
-      crosshair: {
-        vertLine: { color: "#7182ff66" },
-        horzLine: { color: "#7182ff66" },
-      },
+    let instance: Chart | null = null;
+    let destroy: ((value: HTMLElement | Chart | string) => void) | null = null;
+    let disposed = false;
+    void import("klinecharts").then(({ dispose, init }) => {
+      if (disposed || !container.current) return;
+      instance = init(container.current);
+      if (!instance) return;
+      destroy = dispose;
+      instance.setSymbol({ ticker: "SIM", pricePrecision: 4, volumePrecision: 2 });
+      instance.setPeriod({ type: "minute", span: 1 });
+      instance.setDataLoader({ getBars: ({ type, callback }) => { if (type === "backward") loadOlder.current(); callback(bars.current, type === "backward" ? { backward: Boolean(bars.current.length) } : false); } });
+      chart.current = instance;
     });
-    const series = instance.addSeries(CandlestickSeries, {
-      upColor: "#2bbf88",
-      downColor: "#ef5d6f",
-      borderVisible: false,
-      wickUpColor: "#2bbf88",
-      wickDownColor: "#ef5d6f",
-    });
-    const volume = instance.addSeries(HistogramSeries, {
-      priceFormat: { type: "volume" },
-      priceScaleId: "",
-    });
-    volume
-      .priceScale()
-      .applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-    const visible = (next: LogicalRange | null) => {
-      range.current = next;
-      if (next && next.from < 15 && !loading.current) {
-        loading.current = true;
-        loadOlder.current();
-        setTimeout(() => {
-          loading.current = false;
-        }, 800);
-      }
-    };
-    instance.timeScale().subscribeVisibleLogicalRangeChange(visible);
-    chart.current = instance;
-    candleSeries.current = series;
-    volumeSeries.current = volume;
-    return () => {
-      instance.timeScale().unsubscribeVisibleLogicalRangeChange(visible);
-      lines.current = [];
-      candleSeries.current = null;
-      volumeSeries.current = null;
-      range.current = null;
-      instance.remove();
-      chart.current = null;
-    };
+    return () => { disposed = true; if (instance && destroy) destroy(instance); chart.current = null; };
   }, []);
   useEffect(() => {
-    if (!chart.current || !candleSeries.current) return;
-    const oldRange = range.current;
-    candleSeries.current.setData(
-      candles.map((item) => ({
-        time: time(item.time),
-        open: Number(item.open),
-        high: Number(item.high),
-        low: Number(item.low),
-        close: Number(item.close),
-      })),
-    );
-    volumeSeries.current?.setData(
-      candles.map((item) => ({
-        time: time(item.time),
-        value: Number(item.volume),
-        color:
-          Number(item.close) >= Number(item.open) ? "#2bbf8844" : "#ef5d6f44",
-      })),
-    );
-    lines.current.forEach((line) => chart.current?.removeSeries(line));
-    lines.current = [];
-    const add = (points: { time: number; value: number }[], color: string) => {
-      const line = chart.current!.addSeries(LineSeries, {
-        color,
-        lineWidth: 2,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      line.setData(
-        points.map((point) => ({ time: time(point.time), value: point.value })),
-      );
-      lines.current.push(line);
-    };
-    if (overlays.includes("sma")) add(calculateSMA(candles, 20), "#f5bf62");
-    if (overlays.includes("ema")) add(calculateEMA(candles, 20), "#b886f8");
-    if (overlays.includes("vwap")) add(calculateVWAP(candles), "#55b8e8");
-    if (horizontalLine !== undefined)
-      candleSeries.current.createPriceLine({
-        price: horizontalLine,
-        color: "#9da7ff",
-        lineWidth: 1,
-        axisLabelVisible: true,
-        title: "H",
-      });
-    if (oldRange) chart.current.timeScale().setVisibleLogicalRange(oldRange);
-    else chart.current.timeScale().fitContent();
+    bars.current = asBars(candles);
+    chart.current?.resetData();
+    if (!chart.current) return;
+    chart.current.getIndicators().forEach((indicator) => chart.current?.removeIndicator({ id: indicator.id }));
+    chart.current.createIndicator("VOL");
+    if (overlays.includes("sma")) chart.current.createIndicator("MA", false);
+    if (overlays.includes("ema")) chart.current.createIndicator("EMA", false);
+    if (overlays.includes("vwap")) chart.current.createIndicator("AVP", false);
+    if (horizontalLine !== undefined) chart.current.createOverlay({ name: "horizontalStraightLine", points: [{ value: horizontalLine }] });
   }, [candles, overlays, horizontalLine]);
-  return (
-    <div
-      ref={container}
-      className="market-chart"
-      aria-label="Interactive market chart"
-    />
-  );
+  return <div ref={container} className="market-chart" aria-label="Interactive market chart" />;
 }
