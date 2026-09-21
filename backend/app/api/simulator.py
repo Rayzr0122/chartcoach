@@ -19,6 +19,7 @@ from app.models.user import User
 from app.services.simulator_data import DatasetError, get_dataset, load_dataset
 from app.simulator.database import get_simulator_db
 from app.simulator.engine import D, money, process_bar
+from app.simulator.market_data import ProviderRegistry
 from app.simulator.repository import IdempotencyConflict, MongoSimulatorRepository
 
 
@@ -89,6 +90,11 @@ def _dataset(dataset_id: str) -> dict:
     return get_dataset(dataset_id)
 
 
+@lru_cache(maxsize=1)
+def _provider_registry() -> ProviderRegistry:
+    return ProviderRegistry.default()
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -156,6 +162,9 @@ def _instruments() -> list[dict]:
     for venue, asset_class, currency, symbols in groups:
         for symbol in symbols:
             polygon = venue == "NASDAQ"
+            market = {
+                "NSE": "india_equities", "NASDAQ": "us_equities", "CRYPTO": "crypto", "FX": "fx",
+            }.get(venue, "futures")
             result.append({
                 "id": f"{venue}:{symbol}", "symbol": symbol, "name": symbol, "venue": venue,
                 "asset_class": asset_class, "quote_currency": currency, "source": "synthetic-test",
@@ -163,6 +172,9 @@ def _instruments() -> list[dict]:
                 "delayed_source": "polygon-delayed" if polygon else "synthetic-test",
                 "polygon_supported": polygon, "tick_size": "0.01", "quantity_increment": "1",
                 "contract_multiplier": "10" if asset_class == "future" else "1",
+                "market": market, "supported_modes": ["replay"],
+                "data_status": "synthetic_test" if market != "india_equities" else "approved_import_required",
+                "overnight_eligible": market == "india_equities",
             })
     return result
 
@@ -223,6 +235,11 @@ def advance_state(current: dict, count: int = 1) -> tuple:
 @router.get("/instruments")
 def instruments():
     return _instruments()
+
+
+@router.get("/capabilities")
+def capabilities():
+    return _provider_registry().capabilities("development")
 
 
 @router.get("/bootstrap")

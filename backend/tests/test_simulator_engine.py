@@ -25,7 +25,7 @@ def test_market_order_fills_at_next_bar_open_with_fee_and_weighted_cost():
     assert result.positions[0]["quantity"] == "2"
     assert result.positions[0]["average_price"] == "100.00"
     assert result.account["cash"] == "799.80"
-    assert result.account["unrealized_pnl"] == "6.00"
+    assert result.account["unrealized_pnl"] == "5.80"
 
 
 def test_resting_limit_uses_open_improvement_and_never_worse_than_limit():
@@ -60,7 +60,7 @@ def test_usd_fill_converts_notional_fees_and_mark_to_inr():
 
     assert result.account["cash"] == "82983.00"
     assert result.account["equity"] == "100833.00"
-    assert result.account["unrealized_pnl"] == "850.00"
+    assert result.account["unrealized_pnl"] == "833.00"
     assert result.fills[0]["fx_rate"] == "85"
     assert result.fills[0]["conversion_cost"] == "8.50"
     assert result.ledger[0]["currency"] == "INR"
@@ -90,3 +90,27 @@ def test_stop_limit_remains_triggered_until_its_limit_can_fill():
 def test_market_friction_is_adverse_and_deterministic():
     result = process_bar(account(), [], [order(quantity="1")], bar(o="100", c="100"), clock=1, spread_bps=Decimal("5"), slippage_bps=Decimal("2"))
     assert result.fills[0]["price"] == "100.05"
+
+
+def test_bar_does_not_fill_an_order_for_a_different_instrument():
+    aapl = order(instrument_id="NASDAQ:AAPL")
+
+    result = process_bar(account(), [], [aapl], bar(), clock=1, instrument_id="NSE:RELIANCE")
+
+    assert result.fills == []
+    assert result.orders[0]["status"] == "open"
+
+
+def test_fx_realized_pnl_reconciles_to_reporting_currency_cost_basis():
+    bought = process_bar(
+        account("100000"), [], [order(instrument_id="NASDAQ:AAPL", quantity="1")],
+        bar(o="100", c="100"), clock=1, instrument_id="NASDAQ:AAPL", fx_rate=Decimal("80"),
+    )
+    sold = process_bar(
+        bought.account, bought.positions,
+        [order(id="sell", instrument_id="NASDAQ:AAPL", side="sell", quantity="1", reduce_only=True)],
+        bar(o="100", c="100", t=120), clock=2, instrument_id="NASDAQ:AAPL", fx_rate=Decimal("85"),
+    )
+
+    assert sold.account["realized_pnl"] == "500.00"
+    assert sold.account["cash"] == "100500.00"

@@ -33,6 +33,19 @@ def test_catalog_has_full_multi_asset_coverage_and_provider_labels():
     assert next(item for item in catalog if item["id"] == "NSE:RELIANCE")["replay_source"] == "synthetic-test"
 
 
+def test_catalog_and_capabilities_are_server_routed_and_disclose_disabled_data_routes():
+    client, _, _ = client_and_repo()
+
+    capabilities = client.get("/api/v1/simulator/capabilities").json()
+    catalog = client.get("/api/v1/simulator/instruments").json()
+
+    assert next(item for item in capabilities if item["market"] == "us_equities" and item["mode"] == "stream")["enabled"] is False
+    aapl = next(item for item in catalog if item["id"] == "NASDAQ:AAPL")
+    assert aapl["market"] == "us_equities"
+    assert aapl["supported_modes"] == ["replay"]
+    assert aapl["overnight_eligible"] is False
+
+
 def test_session_pins_long_dataset_and_hides_future_bars():
     client, _, _ = client_and_repo()
     dataset = fixture_dataset()

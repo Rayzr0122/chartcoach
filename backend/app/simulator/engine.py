@@ -77,6 +77,8 @@ def process_bar(
     for current in working:
         if current.get("status") != "open" or int(current.get("submitted_clock", -1)) >= clock:
             continue
+        if current.get("instrument_id", instrument_id) != instrument_id:
+            continue
         group = current.get("oco_group")
         if group and group in completed_oco:
             current["status"] = "cancelled"
@@ -106,14 +108,21 @@ def process_bar(
             cash -= cost
             old_qty = held
             old_avg = D(existing["average_price"]) if existing else ZERO
+            old_reporting_avg = D(existing.get("reporting_average_price", old_avg * fx_rate)) if existing else ZERO
             new_qty = old_qty + quantity
-            pos[instrument] = {"instrument_id": instrument, "quantity": format(new_qty, "f"), "average_price": money((old_qty * old_avg + quantity * price) / new_qty)}
+            pos[instrument] = {
+                "instrument_id": instrument,
+                "quantity": format(new_qty, "f"),
+                "average_price": money((old_qty * old_avg + quantity * price) / new_qty),
+                "reporting_average_price": money((old_qty * old_reporting_avg + cost) / new_qty),
+            }
             amount = -cost
         else:
             avg = D(existing["average_price"])
+            reporting_avg = D(existing.get("reporting_average_price", avg * fx_rate))
             proceeds = reporting_notional - fee - conversion_cost
             cash += proceeds
-            realized += (price - avg) * quantity * fx_rate - fee - conversion_cost
+            realized += proceeds - reporting_avg * quantity
             remaining = held - quantity
             if remaining:
                 pos[instrument] = {**existing, "quantity": format(remaining, "f")}
@@ -159,7 +168,8 @@ def process_bar(
     if marked:
         marked["market_price"] = money(mark)
         marked["fx_rate"] = format(fx_rate, "f")
-        marked["unrealized_pnl"] = money((mark - D(marked["average_price"])) * D(marked["quantity"]) * fx_rate)
+        reporting_avg = D(marked.get("reporting_average_price", D(marked["average_price"]) * fx_rate))
+        marked["unrealized_pnl"] = money(mark * D(marked["quantity"]) * fx_rate - reporting_avg * D(marked["quantity"]))
         marked["market_value"] = money(mark * D(marked["quantity"]) * fx_rate)
     working.extend(protective_orders)
     unrealized = sum((D(p.get("unrealized_pnl", 0)) for p in pos.values()), ZERO)
