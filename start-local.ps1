@@ -5,6 +5,42 @@ $envFile = Join-Path $localState "local.env"
 $nextBinary = Join-Path $workspace "frontend\node_modules\.bin\next.cmd"
 $backendPython = Join-Path $workspace "backend\venv\Scripts\python.exe"
 
+function Start-LocalProcess {
+    param(
+        [string]$FilePath,
+        [string]$WorkingDirectory,
+        [string[]]$Arguments,
+        [hashtable]$Environment,
+        [string]$StandardOutputPath,
+        [string]$StandardErrorPath
+    )
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.Arguments = [string]::Join(" ", ($Arguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }))
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.RedirectStandardInput = $false
+    foreach ($key in $Environment.Keys) {
+        $startInfo.EnvironmentVariables[$key] = [string]$Environment[$key]
+    }
+    $outputFile = $StandardOutputPath
+    $errorFile = $StandardErrorPath
+    $outputHandler = { param($sender, $event) if ($null -ne $event.Data) { Add-Content -LiteralPath $outputFile -Value $event.Data } }.GetNewClosure()
+    $errorHandler = { param($sender, $event) if ($null -ne $event.Data) { Add-Content -LiteralPath $errorFile -Value $event.Data } }.GetNewClosure()
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) { throw "Unable to start $FilePath." }
+    $process.add_OutputDataReceived($outputHandler)
+    $process.add_ErrorDataReceived($errorHandler)
+    $process.BeginOutputReadLine()
+    $process.BeginErrorReadLine()
+    return $process
+}
+
 if (-not (Test-Path -LiteralPath $backendPython)) {
     $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
     if (-not $pythonCommand) {
@@ -77,21 +113,17 @@ foreach ($requiredPort in @(3000, 8000)) {
         throw "Port $requiredPort is already in use by process $($listener[0].OwningProcess). Stop the existing local stack first."
     }
 }
-$backendProcess = Start-Process $backendPython -WorkingDirectory (Join-Path $workspace "backend") `
-    -WindowStyle Hidden -PassThru -Environment $backendEnvironment `
-    -RedirectStandardOutput (Join-Path $localState "backend.out.log") `
-    -RedirectStandardError (Join-Path $localState "backend.err.log") `
-    -ArgumentList "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"
+$backendProcess = Start-LocalProcess $backendPython (Join-Path $workspace "backend") `
+    @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000") $backendEnvironment `
+    (Join-Path $localState "backend.out.log") (Join-Path $localState "backend.err.log")
 $frontendProcess = Start-Process npm.cmd -WorkingDirectory (Join-Path $workspace "frontend") `
     -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput (Join-Path $localState "frontend.out.log") `
     -RedirectStandardError (Join-Path $localState "frontend.err.log") `
     -ArgumentList "run", "dev", "--", "--hostname", "127.0.0.1", "--port", "3000"
-$workerProcess = Start-Process $backendPython -WorkingDirectory (Join-Path $workspace "backend") `
-    -WindowStyle Hidden -PassThru -Environment $backendEnvironment `
-    -RedirectStandardOutput (Join-Path $localState "worker.out.log") `
-    -RedirectStandardError (Join-Path $localState "worker.err.log") `
-    -ArgumentList "-m", "app.workers.simulator_worker"
+$workerProcess = Start-LocalProcess $backendPython (Join-Path $workspace "backend") `
+    @("-m", "app.workers.simulator_worker") $backendEnvironment `
+    (Join-Path $localState "worker.out.log") (Join-Path $localState "worker.err.log")
 [IO.File]::WriteAllText((Join-Path $localState "backend.pid"), "$($backendProcess.Id)")
 [IO.File]::WriteAllText((Join-Path $localState "frontend.pid"), "$($frontendProcess.Id)")
 [IO.File]::WriteAllText((Join-Path $localState "worker.pid"), "$($workerProcess.Id)")
