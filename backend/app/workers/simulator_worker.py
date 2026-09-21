@@ -7,13 +7,15 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import redis.asyncio as redis
+import websockets
 
 from app.api.simulator import advance_state
 from app.config import settings
 from app.simulator.database import get_simulator_db
 from app.simulator.engine import process_quote_trade
-from app.simulator.event_stream import MARKET_EVENTS_STREAM, decode_event
+from app.simulator.event_stream import MARKET_EVENTS_STREAM, decode_event, publish_event
 from app.simulator.market_data import MarketDataError
+from app.simulator.provider_streams import stream_alpaca, stream_coinbase
 from app.simulator.repository import MongoSimulatorRepository
 
 
@@ -118,11 +120,30 @@ async def publish_outbox(redis_client, repo) -> int:
     return emitted
 
 
+async def pump_provider_events(redis_client, repo, provider: str) -> None:
+    """Reconnect a provider feed periodically so active subscriptions are refreshed."""
+
+    while True:
+        sessions = [item for item in repo.list_active_sessions() if item.get("mode") == "stream" and item.get("state") == "playing" and item.get("data_source") == provider]
+        symbols = {item["instrument_id"].split(":", 1)[1] for item in sessions}
+        if not symbols or (provider == "alpaca_iex" and not (settings.alpaca_api_key and settings.alpaca_api_secret)):
+            await asyncio.sleep(5)
+            continue
+        stream = stream_alpaca(symbols) if provider == "alpaca_iex" else stream_coinbase(symbols)
+        try:
+            async with asyncio.timeout(60):
+                async for event in stream:
+                    await publish_event(redis_client, event)
+        except (MarketDataError, ValueError, OSError, websockets.WebSocketException, TimeoutError):
+            await asyncio.sleep(2)
+
+
 async def run() -> None:
     redis_client = redis.from_url(settings.simulator_redis_url, decode_responses=True)
     await redis_client.ping()
     repo = MongoSimulatorRepository(get_simulator_db())
     repo.ensure_indexes()
+    feeds = [asyncio.create_task(pump_provider_events(redis_client, repo, provider)) for provider in ("alpaca_iex", "coinbase")]
     try:
         while True:
             advance_sessions(repo)
@@ -130,6 +151,9 @@ async def run() -> None:
             await consume_market_events(redis_client, repo)
             await asyncio.sleep(0.9)
     finally:
+        for feed in feeds:
+            feed.cancel()
+        await asyncio.gather(*feeds, return_exceptions=True)
         await redis_client.aclose()
 
 
