@@ -19,7 +19,7 @@ from app.models.user import User
 from app.services.simulator_data import DatasetError, get_dataset, load_dataset
 from app.simulator.database import get_simulator_db
 from app.simulator.engine import D, money, process_bar
-from app.simulator.market_data import ProviderRegistry
+from app.simulator.market_data import MarketDataError, ProviderRegistry
 from app.simulator.repository import IdempotencyConflict, MongoSimulatorRepository
 
 
@@ -30,9 +30,9 @@ STARTING_EQUITY = "1000000.00"
 
 
 class SessionCreate(BaseModel):
-    mode: str = Field(pattern="^(replay|delayed)$")
+    mode: str = Field(pattern="^(replay|delayed|stream)$")
     instrument_id: str = "NSE:RELIANCE"
-    source: str = Field(default="synthetic-test", pattern="^(synthetic-test|polygon)$")
+    source: str | None = Field(default=None, pattern="^(synthetic-test|polygon)$")
     history_days: int = Field(default=30)
     drill_id: str | None = None
 
@@ -206,6 +206,20 @@ def _fx_bar(dataset_id: str | None, timestamp: int) -> dict | None:
     return choices[-1]
 
 
+def _session_source(payload: SessionCreate, instrument: dict) -> str:
+    """Resolve legacy source input through a server-owned rights gate."""
+    if payload.source in (None, "synthetic-test"):
+        if payload.mode == "stream":
+            raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "No approved streaming provider is active for this market."})
+        return "synthetic-test"
+    try:
+        _provider_registry().activate(instrument["market"], "stream" if payload.mode in {"stream", "delayed"} else "replay", payload.source, "development")
+    except MarketDataError as error:
+        code = "MARKET_DATA_RIGHTS_REQUIRED" if "rights" in str(error) else "MARKET_DATA_UNAVAILABLE"
+        raise HTTPException(503, detail={"code": code, "message": "The requested market-data route is not enabled."}) from None
+    return payload.source
+
+
 def advance_state(current: dict, count: int = 1) -> tuple:
     session = {**current["session"]}
     dataset = _dataset(session["dataset_id"])
@@ -252,35 +266,37 @@ def bootstrap(user: User = Depends(get_current_user), repo=Depends(get_simulator
 @router.post("/sessions")
 async def create_session(payload: SessionCreate, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
     _require_paid(user)
-    if payload.instrument_id not in {item["id"] for item in _instruments()}:
+    instrument = next((item for item in _instruments() if item["id"] == payload.instrument_id), None)
+    if not instrument:
         raise HTTPException(422, detail={"code": "UNSUPPORTED_INSTRUMENT", "message": "The selected instrument is not available."})
     if payload.history_days not in {7, 30, 90, 365}:
         raise HTTPException(422, detail={"code": "INVALID_HISTORY_DAYS", "message": "History must be 7, 30, 90 or 365 days."})
-    if payload.source == "polygon" and not payload.instrument_id.startswith("NASDAQ:"):
-        raise HTTPException(422, detail={"code": "UNSUPPORTED_PROVIDER_INSTRUMENT", "message": "Polygon replay is currently enabled for supported US stocks."})
+    source = _session_source(payload, instrument)
     try:
-        dataset = await load_dataset(payload.instrument_id, payload.source, payload.history_days)
-        fx_dataset = await load_dataset("FX:USD-INR", "polygon", payload.history_days) if payload.source == "polygon" and payload.instrument_id.startswith("NASDAQ:") else None
+        dataset = await load_dataset(payload.instrument_id, source, payload.history_days)
+        fx_dataset = await load_dataset("FX:USD-INR", "polygon", payload.history_days) if source == "polygon" and payload.instrument_id.startswith("NASDAQ:") else None
     except DatasetError as error:
         raise HTTPException(503, detail={"code": error.code, "message": error.message}) from None
-    account = repo.find_active_account(user.id, "delayed") if payload.mode == "delayed" else None
+    account_mode = "delayed" if payload.mode in {"delayed", "stream"} else "replay"
+    account = repo.find_active_account(user.id, account_mode) if account_mode == "delayed" else None
     if not account:
         account = {
-            "id": f"acct_{uuid4().hex}", "learner_id": user.id, "mode": payload.mode, "status": "active",
+            "id": f"acct_{uuid4().hex}", "learner_id": user.id, "mode": account_mode, "status": "active",
             "reporting_currency": "INR", "cash": STARTING_EQUITY, "equity": STARTING_EQUITY,
             "buying_power": STARTING_EQUITY, "reserved": "0.00", "realized_pnl": "0.00",
             "unrealized_pnl": "0.00", "revision": 1, "created_at": _now(),
         }
-    initial_clock = min(300, max(0, len(dataset["bars"]) - (1 if payload.mode == "delayed" else 0)))
+    initial_clock = min(300, max(0, len(dataset["bars"]) - (1 if payload.mode in {"delayed", "stream"} else 0)))
     session = {
         "id": f"sim_{uuid4().hex}", "learner_id": user.id, "account_id": account["id"],
-        "mode": payload.mode, "instrument_id": payload.instrument_id, "dataset_id": dataset["id"],
+        "mode": "stream" if payload.mode == "stream" else payload.mode, "instrument_id": payload.instrument_id, "dataset_id": dataset["id"],
         "fx_dataset_id": fx_dataset["id"] if fx_dataset else None, "data_source": dataset["source"],
         "history_days": payload.history_days, "clock": initial_clock, "initial_clock": initial_clock,
         "market_time": dataset["bars"][initial_clock - 1]["time"] if initial_clock else None,
         "state": "paused", "speed": 5, "revision": 1, "coverage": dataset["coverage"],
         "total_bars": len(dataset["bars"]), "data_status": "ready", "created_at": _now(),
-        "drill_id": payload.drill_id, "assisted": False,
+        "drill_id": payload.drill_id, "assisted": False, "engine_version": "candle_replay_v1",
+        "profile_version": "cash_equity_dev_v1", "migration_status": "native",
     }
     try:
         state = repo.create_session_bundle(user.id, idempotency_key, _fingerprint("session", payload.model_dump(mode="json")), account, session)

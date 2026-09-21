@@ -6,6 +6,7 @@ import { OrderTicket } from "@/components/simulator/OrderTicket";
 import {
   formatInr,
   formatQuote,
+  instrumentSupportsMode,
   sessionLabel,
   simulatorApi,
   simulatorErrorPresentation,
@@ -22,7 +23,6 @@ export default function TradePage() {
   const [instruments, setInstruments] = useState<Instrument[]>([]),
     [selected, setSelected] = useState("NASDAQ:AAPL"),
     [mode, setMode] = useState<"replay" | "delayed">("replay"),
-    [source, setSource] = useState<"synthetic-test" | "polygon">("polygon"),
     [days, setDays] = useState<7 | 30 | 90 | 365>(30),
     [session, setSession] = useState<SimulatorSession | null>(null),
     [candles, setCandles] = useState<Candle[]>([]),
@@ -62,11 +62,12 @@ export default function TradePage() {
     [timeframe],
   );
   useEffect(() => {
-    Promise.allSettled([simulatorApi.instruments(), simulatorApi.bootstrap()])
-      .then(async ([catalog, access]) => {
+    Promise.allSettled([simulatorApi.instruments(), simulatorApi.bootstrap(), simulatorApi.capabilities()])
+      .then(async ([catalog, access, capabilities]) => {
         if (catalog.status === "fulfilled") setInstruments(catalog.value);
         else setError(catalog.reason);
         if (access.status === "rejected") setError(access.reason);
+        if (capabilities.status === "rejected") setError(capabilities.reason);
         const id = new URLSearchParams(location.search).get("session");
         if (id && access.status === "fulfilled") {
           const s = await refresh(id);
@@ -104,7 +105,7 @@ export default function TradePage() {
     setError(undefined);
     try {
       const s = await simulatorApi.createSession(
-        { mode, instrument_id: selected, source, history_days: days },
+        { mode, instrument_id: selected, history_days: days },
         uid(),
       );
       setSession(s);
@@ -220,6 +221,7 @@ export default function TradePage() {
               </button>
               <button
                 className={mode === "delayed" ? "on" : ""}
+                disabled={!instrumentSupportsMode(instrument || {}, "delayed")}
                 onClick={() => setMode("delayed")}
               >
                 Delayed paper<small>Persistent account</small>
@@ -230,12 +232,9 @@ export default function TradePage() {
               <select
                 value={selected}
                 onChange={(e) => {
+                  const next = instruments.find((item) => item.id === e.target.value);
                   setSelected(e.target.value);
-                  setSource(
-                    e.target.value.startsWith("NASDAQ:")
-                      ? "polygon"
-                      : "synthetic-test",
-                  );
+                  if (mode === "delayed" && next && !instrumentSupportsMode(next, mode)) setMode("replay");
                 }}
               >
                 {instruments.map((x) => (
@@ -261,24 +260,9 @@ export default function TradePage() {
                   ))}
                 </select>
               </label>
-              <label>
-                Data source
-                <select
-                  value={source}
-                  onChange={(e) => setSource(e.target.value as typeof source)}
-                >
-                  <option value="synthetic-test">Deterministic test</option>
-                  {selected.startsWith("NASDAQ:") && (
-                    <option value="polygon">Polygon market data</option>
-                  )}
-                </select>
-              </label>
             </div>
             <p className="note">
-              ●{" "}
-              {source === "polygon"
-                ? `Polygon minute bars · ${mode === "delayed" ? "15-minute delay" : "historical replay"}`
-                : "Labeled educational fixture data"}
+              ● {instrument?.data_status === "synthetic_test" ? "Labeled educational fixture data" : "Server-approved market-data route required"}
             </p>
             <button className="open" disabled={pending} onClick={start}>
               {pending ? "Preparing market data…" : "Open trading workspace →"}

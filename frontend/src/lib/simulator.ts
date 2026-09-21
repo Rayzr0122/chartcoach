@@ -8,8 +8,8 @@ export type SimulatorFill = { id: string; order_id: string; instrument_id?: stri
 export type SimulatorPosition = { instrument_id: string; quantity: string; average_price?: string; avg_price?: string; market_price?: string; market_value?: string; unrealized_pnl?: string; realized_pnl?: string };
 export type LedgerEntry = { id?: string; type?: string; event?: string; amount?: string; balance?: string; time?: number; created_at?: string; description?: string };
 export type DatasetCoverage = { start?: number | string; end?: number | string; requested_days?: number; actual_days?: number; complete?: boolean; message?: string };
-export type SimulatorSession = { id: string; mode: "replay" | "delayed" | "drill"; instrument_id: string; clock?: number; initial_clock?: number; market_time?: number; state: string; speed: number; assisted: boolean; parent_session_id?: string; forked_at_clock?: number; revision: number; source?: string; data_source?: string; data_status?: string; coverage?: DatasetCoverage; dataset?: { coverage?: DatasetCoverage; source?: string }; total_bars?: number; account: SimulatorAccount; orders: SimulatorOrder[]; fills: SimulatorFill[]; positions?: SimulatorPosition[]; ledger?: LedgerEntry[] };
-export type Instrument = { id: string; symbol: string; venue: string; asset_class: string; quote_currency: string; source: string; replay_source?: string; delayed_source?: string; polygon_supported?: boolean; name?: string };
+export type SimulatorSession = { id: string; mode: "replay" | "delayed" | "stream" | "drill"; instrument_id: string; clock?: number; initial_clock?: number; market_time?: number; state: string; speed: number; assisted: boolean; parent_session_id?: string; forked_at_clock?: number; revision: number; source?: string; data_source?: string; data_status?: string; coverage?: DatasetCoverage; dataset?: { coverage?: DatasetCoverage; source?: string }; total_bars?: number; account: SimulatorAccount; orders: SimulatorOrder[]; fills: SimulatorFill[]; positions?: SimulatorPosition[]; ledger?: LedgerEntry[] };
+export type Instrument = { id: string; symbol: string; venue: string; asset_class: string; quote_currency: string; source: string; replay_source?: string; delayed_source?: string; polygon_supported?: boolean; name?: string; market?: string; supported_modes?: Array<"replay" | "stream">; data_status?: string; overnight_eligible?: boolean };
 export type Journal = { plan: string; reflection: string; updated_at?: string };
 export type Review = { score: number; passed: boolean; assisted: boolean; dimensions: Record<string, number>; ai_review?: { available: boolean; reason?: string } };
 
@@ -74,6 +74,7 @@ export function validateOrderDraft(order: OrderDraft): string[] {
   return errors;
 }
 export function createLatestRequestGuard() { let latest = 0; return { issue: () => ++latest, isLatest: (request: number) => request === latest }; }
+export const instrumentSupportsMode = (instrument: Pick<Instrument, "supported_modes">, mode: "replay" | "delayed") => instrument.supported_modes?.includes(mode === "delayed" ? "stream" : mode) ?? mode === "replay";
 
 const baseUrl = () => process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || (typeof window === "undefined" ? "http://localhost:8000" : `${window.location.protocol}//${window.location.hostname}:8000`);
 export class SimulatorApiError extends Error { constructor(message: string, readonly status: number, readonly code?: string) { super(message); this.name = "SimulatorApiError"; } }
@@ -88,9 +89,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const keyed = (key: string, body?: unknown, method = "POST"): RequestInit => ({ method, headers: { "Idempotency-Key": key }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 export const simulatorApi = {
   bootstrap: () => request<{ equity: string; account_id: string; modes: string[] }>("/bootstrap"),
-  instruments: () => request<Instrument[]>("/instruments"), sessions: () => request<SimulatorSession[]>("/sessions"),
+  instruments: () => request<Instrument[]>("/instruments"), capabilities: () => request<Array<{ market: string; mode: string; available: boolean; reason?: string }>>("/capabilities"), sessions: () => request<SimulatorSession[]>("/sessions"),
   drills: () => request<Array<{ id: string; title: string; title_hi: string; objective: string }>>("/drills"),
-  createSession: (payload: { mode: "replay" | "delayed" | "drill"; instrument_id: string; source: "synthetic-test" | "polygon"; history_days: 7 | 30 | 90 | 365; drill_id?: string }, key: string) => request<SimulatorSession>("/sessions", keyed(key, payload)),
+  createSession: (payload: { mode: "replay" | "delayed" | "stream"; instrument_id: string; history_days: 7 | 30 | 90 | 365; drill_id?: string }, key: string) => request<SimulatorSession>("/sessions", keyed(key, payload)),
   getSession: (id: string) => request<SimulatorSession>(`/sessions/${id}`),
   candles: (id: string, options: { before?: number; limit?: number; timeframe?: Timeframe } = {}) => { const query = new URLSearchParams(); if (options.before) query.set("before", String(options.before)); query.set("limit", String(options.limit ?? 500)); query.set("timeframe", options.timeframe ?? "1m"); return request<Candle[]>(`/sessions/${id}/candles?${query}`); },
   control: (id: string, action: string, key: string, value?: number, controller_id?: string) => request<SimulatorSession>(`/sessions/${id}/controls`, keyed(key, { action, ...(value === undefined ? {} : { value }), ...(controller_id ? { controller_id } : {}) })),
@@ -115,4 +116,4 @@ export function simulatorErrorPresentation(error: unknown): SimulatorErrorPresen
   const message = error instanceof Error && error.message ? error.message : typeof candidate?.message === "string" && candidate.message ? candidate.message : "The simulator could not complete that request."; return { title: "Simulator request failed", message, actionLabel: "Retry" };
 }
 const sourceLabels: Record<string, string> = { "synthetic-test": "Synthetic test data", polygon: "Polygon requested", "polygon-delayed": "Polygon delayed data", "historical-replay": "Historical replay data", "delayed-feed": "Delayed market feed" };
-export const sessionLabel = (mode: string, source: string) => `${mode === "replay" ? "Replay" : mode === "delayed" ? "Delayed practice" : "Guided drill"} · ${sourceLabels[source] || source}`;
+export const sessionLabel = (mode: string, source: string) => `${mode === "replay" ? "Replay" : mode === "delayed" ? "Delayed practice" : mode === "stream" ? "Market practice" : "Guided drill"} · ${sourceLabels[source] || source}`;

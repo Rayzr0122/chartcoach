@@ -46,6 +46,20 @@ def test_catalog_and_capabilities_are_server_routed_and_disclose_disabled_data_r
     assert aapl["overnight_eligible"] is False
 
 
+def test_session_uses_a_server_route_and_rejects_unapproved_legacy_provider_selection():
+    client, _, _ = client_and_repo()
+    dataset = fixture_dataset("NASDAQ:AAPL")
+    with patch.object(simulator, "load_dataset", new=AsyncMock(return_value=dataset)), patch.object(simulator, "get_dataset", return_value=dataset):
+        simulator._dataset.cache_clear()
+        routed = client.post("/api/v1/simulator/sessions", json={"mode": "replay", "instrument_id": "NASDAQ:AAPL"}, headers={"Idempotency-Key": "routed"})
+        blocked = client.post("/api/v1/simulator/sessions", json={"mode": "replay", "instrument_id": "NASDAQ:AAPL", "source": "polygon"}, headers={"Idempotency-Key": "blocked"})
+
+    assert routed.status_code == 200
+    assert routed.json()["data_source"] == "synthetic-test"
+    assert blocked.status_code == 503
+    assert blocked.json()["detail"]["code"] == "MARKET_DATA_RIGHTS_REQUIRED"
+
+
 def test_session_pins_long_dataset_and_hides_future_bars():
     client, _, _ = client_and_repo()
     dataset = fixture_dataset()

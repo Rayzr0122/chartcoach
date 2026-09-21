@@ -8,6 +8,7 @@ import {
   calculateVWAP,
   createLatestRequestGuard,
   formatInr,
+  instrumentSupportsMode,
   sessionLabel,
   simulatorErrorPresentation,
   SimulatorApiError,
@@ -48,6 +49,10 @@ describe("simulator presentation helpers", () => {
 
   it("labels Polygon delayed instruments separately from synthetic fixtures", () => {
     expect(sessionLabel("delayed", "polygon-delayed")).toBe("Delayed practice · Polygon delayed data");
+  });
+
+  it("uses server-declared modes instead of inferring a provider from the venue", () => {
+    expect(instrumentSupportsMode({ supported_modes: ["replay"] }, "delayed")).toBe(false);
   });
 });
 
