@@ -84,6 +84,12 @@ class InMemorySimulatorRepository:
         values = [event.get("sequence", 0) for event in self.outbox if event["session_id"] == session_id]
         return (min(values), max(values, default=0)) if values else (None, 0)
 
+    def unpublished_outbox(self, limit: int = 100) -> list[dict]:
+        return [copy.deepcopy(event) for event in self.outbox if not event.get("published_at")][:limit]
+
+    def mark_outbox_published(self, event_id: str, published_at: str) -> None:
+        next(event for event in self.outbox if event["id"] == event_id)["published_at"] = published_at
+
     def snapshot(self, session_id: str) -> dict | None:
         session = self.get_session(session_id)
         if not session:
@@ -221,6 +227,12 @@ class MongoSimulatorRepository:
         first = self.db.simulator_outbox.find_one({"session_id": session_id}, {"_id": 0, "sequence": 1}, sort=[("sequence", 1)])
         last = self.db.simulator_outbox.find_one({"session_id": session_id}, {"_id": 0, "sequence": 1}, sort=[("sequence", -1)])
         return (first["sequence"] if first else None, last["sequence"] if last else 0)
+
+    def unpublished_outbox(self, limit: int = 100) -> list[dict]:
+        return list(self.db.simulator_outbox.find({"published_at": None}, {"_id": 0}).sort("sequence", 1).limit(limit))
+
+    def mark_outbox_published(self, event_id: str, published_at: str) -> None:
+        self.db.simulator_outbox.update_one({"id": event_id, "published_at": None}, {"$set": {"published_at": published_at}})
 
     def snapshot(self, session_id: str, mongo_session=None) -> dict | None:
         session = self.db.simulator_sessions.find_one({"id": session_id}, {"_id": 0}, session=mongo_session)

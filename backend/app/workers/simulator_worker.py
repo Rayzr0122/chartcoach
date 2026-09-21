@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -10,7 +11,13 @@ import redis.asyncio as redis
 from app.api.simulator import advance_state
 from app.config import settings
 from app.simulator.database import get_simulator_db
+from app.simulator.engine import process_quote_trade
+from app.simulator.event_stream import MARKET_EVENTS_STREAM, decode_event
+from app.simulator.market_data import MarketDataError
 from app.simulator.repository import MongoSimulatorRepository
+
+
+OUTBOX_STREAM = "simulator:outbox"
 
 
 def _parse(value: str | None) -> datetime | None:
@@ -57,6 +64,60 @@ def advance_sessions(repo, now: datetime | None = None) -> int:
     return changed
 
 
+def process_market_event(repo, event) -> int:
+    """Apply one provider event to matching live sessions exactly once."""
+
+    changed = 0
+    for listed in repo.list_active_sessions():
+        if listed.get("mode") != "stream" or listed.get("state") != "playing" or listed.get("instrument_id") != event.instrument_id:
+            continue
+        state = repo.snapshot(listed["id"])
+        if state["session"].get("last_source_event_id") == event.event_id:
+            continue
+
+        def execute(current):
+            session = {**current["session"], "market_time": event.exchange_time, "last_source_event_id": event.event_id, "clock": current["session"].get("clock", 0) + 1}
+            result = process_quote_trade(current["account"], current["positions"], current["orders"], event, session["clock"])
+            emitted = {"id": f"evt_{uuid4().hex}", "type": "market.event_applied", "source_event_id": event.event_id, "created_at": datetime.now(timezone.utc).isoformat()}
+            return {"market_time": session["market_time"]}, {"session": session, "account": result.account, "positions": result.positions, "orders": result.orders, "fills": result.fills, "ledger": result.ledger, "events": [emitted]}
+
+        repo.mutate(listed["id"], f"market:{event.source}:{event.event_id}", event.event_id, execute)
+        changed += 1
+    return changed
+
+
+async def consume_market_events(redis_client, repo) -> int:
+    """Consume one bounded batch and retain malformed provider payloads for inspection."""
+
+    group, consumer = "simulator-execution", "worker"
+    try:
+        await redis_client.xgroup_create(MARKET_EVENTS_STREAM, group, id="0", mkstream=True)
+    except redis.ResponseError as error:
+        if "BUSYGROUP" not in str(error):
+            raise
+    records = await redis_client.xreadgroup(group, consumer, {MARKET_EVENTS_STREAM: ">"}, count=100, block=100)
+    changed = 0
+    for _, entries in records:
+        for message_id, fields in entries:
+            try:
+                changed += process_market_event(repo, decode_event(fields["event"]))
+            except (KeyError, MarketDataError, ValueError) as error:
+                repo.db.simulator_market_event_failures.insert_one({"stream_id": message_id, "payload": fields, "reason": str(error), "created_at": datetime.now(timezone.utc).isoformat()})
+            await redis_client.xack(MARKET_EVENTS_STREAM, group, message_id)
+    return changed
+
+
+async def publish_outbox(redis_client, repo) -> int:
+    """Publish committed notifications at least once; consumers deduplicate event ids."""
+
+    emitted = 0
+    for event in repo.unpublished_outbox():
+        await redis_client.xadd(OUTBOX_STREAM, {"event": json.dumps(event, default=str, separators=(",", ":"))}, maxlen=100_000, approximate=True)
+        repo.mark_outbox_published(event["id"], datetime.now(timezone.utc).isoformat())
+        emitted += 1
+    return emitted
+
+
 async def run() -> None:
     redis_client = redis.from_url(settings.simulator_redis_url, decode_responses=True)
     await redis_client.ping()
@@ -65,7 +126,9 @@ async def run() -> None:
     try:
         while True:
             advance_sessions(repo)
-            await asyncio.sleep(1)
+            await publish_outbox(redis_client, repo)
+            await consume_market_events(redis_client, repo)
+            await asyncio.sleep(0.9)
     finally:
         await redis_client.aclose()
 

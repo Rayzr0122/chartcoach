@@ -309,7 +309,7 @@ async def create_session(payload: SessionCreate, idempotency_key: str = Header(.
         "market_time": dataset["bars"][initial_clock - 1]["time"] if initial_clock else None,
         "state": "paused", "speed": 5, "revision": 1, "coverage": dataset["coverage"],
         "total_bars": len(dataset["bars"]), "data_status": "ready", "created_at": _now(),
-        "drill_id": payload.drill_id, "assisted": False, "engine_version": "candle_replay_v1",
+        "drill_id": payload.drill_id, "assisted": False, "engine_version": "quote_trade_v1" if payload.mode == "stream" else "candle_replay_v1",
         "profile_version": "cash_equity_dev_v1", "migration_status": "native",
     }
     try:
