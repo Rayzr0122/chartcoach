@@ -17,7 +17,7 @@ def test_registry_exposes_provider_neutral_capabilities_without_enabling_unappro
 
     us_replay = next(item for item in capabilities if item["market"] == "us_equities" and item["mode"] == "replay")
     india_replay = next(item for item in capabilities if item["market"] == "india_equities" and item["mode"] == "replay")
-    assert us_replay["provider"] == "polygon"
+    assert us_replay["provider"] == "alpaca_iex"
     assert us_replay["enabled"] is False
     assert india_replay["provider"] == "imported"
     assert india_replay["enabled"] is True

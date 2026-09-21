@@ -86,6 +86,27 @@ class TestSimulatorData(unittest.IsolatedAsyncioTestCase):
         self.assertIn("apiKey", client.calls[0][1]["params"])
         self.assertIn("apiKey", client.calls[1][1]["params"])
 
+    async def test_alpaca_iex_maps_provider_bars_to_an_immutable_replay_dataset(self):
+        now = 1_700_000_040
+        client = FakeClient([FakeResponse(200, {"bars": [{"t": "2023-11-14T22:00:00Z", "o": 100, "h": 102, "l": 99, "c": 101, "v": 12}]})])
+        with patch.object(simulator_data, "utc_now_seconds", return_value=now), patch.object(simulator_data.httpx, "AsyncClient", return_value=client), patch.object(simulator_data.settings, "alpaca_api_key", "test-key"), patch.object(simulator_data.settings, "alpaca_api_secret", "test-secret"):
+            dataset = await simulator_data.load_dataset("NASDAQ:AAPL", "alpaca_iex", history_days=7)
+
+        self.assertEqual(dataset["source"], "alpaca_iex")
+        self.assertEqual(dataset["bars"][0]["close"], "101")
+        self.assertEqual(client.calls[0][1]["headers"]["APCA-API-KEY-ID"], "test-key")
+
+    async def test_alpha_vantage_maps_fx_intraday_bars_and_rejects_throttling(self):
+        now = 1_700_000_040
+        payload = {"Time Series FX (1min)": {"2023-11-14 22:00:00": {"1. open": "83", "2. high": "84", "3. low": "82", "4. close": "83.5"}}}
+        client = FakeClient([FakeResponse(200, payload)])
+        with patch.object(simulator_data, "utc_now_seconds", return_value=now), patch.object(simulator_data.httpx, "AsyncClient", return_value=client), patch.object(simulator_data.settings, "alpha_vantage_api_key", "test-key"):
+            dataset = await simulator_data.load_dataset("FX:USD-INR", "alpha_vantage", history_days=7)
+
+        self.assertEqual(dataset["source"], "alpha_vantage")
+        self.assertEqual(dataset["bars"][0]["volume"], "0")
+        self.assertEqual(client.calls[0][1]["params"]["function"], "FX_INTRADAY")
+
     async def test_polygon_errors_are_typed_safe_and_have_no_synthetic_fallback(self):
         for status, code in ((403, "POLYGON_FORBIDDEN"), (429, "POLYGON_RATE_LIMIT")):
             client = FakeClient([FakeResponse(status, {"error": "secret details"}, {"retry-after": "9"})])

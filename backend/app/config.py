@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     # Configure POLYGON_API_KEY through the backend environment; never commit it.
     polygon_api_key: str = ""
 
+    # Simulator market-data credentials. These remain server-side and do not
+    # activate a learner-facing route without an approved use-rights record.
+    alpaca_api_key: str = ""
+    alpaca_api_secret: str = ""
+    alpha_vantage_api_key: str = ""
+
     # Whether the login cookie requires HTTPS. Keep False for local dev over
     # plain http://, but this MUST be True in any real deployment.
     cookie_secure: bool = False

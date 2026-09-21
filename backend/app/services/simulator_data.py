@@ -25,6 +25,8 @@ from app.config import settings
 DATASET_ROOT = Path(settings.media_root).resolve() / "datasets"
 ALLOWED_HISTORY_DAYS = {7, 30, 90, 365}
 POLYGON_HOST = "api.polygon.io"
+ALPACA_DATA_HOST = "data.alpaca.markets"
+ALPHA_VANTAGE_HOST = "www.alphavantage.co"
 MAX_PAGES = 32
 MAX_BARS = 1_000_000
 INSTRUMENT_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
@@ -188,7 +190,7 @@ def _instrument_parts(instrument_id: str, source: str) -> tuple[str, str, bool]:
     venue, symbol = canonical.split(":", 1)
     if venue == "FX" and symbol == "USD-INR":
         return canonical, "C:USDINR", True
-    if source == "polygon" and venue not in SUPPORTED_POLYGON_VENUES:
+    if source in {"polygon", "alpaca_iex"} and venue not in SUPPORTED_POLYGON_VENUES:
         raise DatasetError("UNSUPPORTED_VENUE", "Polygon does not support this instrument venue")
     return canonical, symbol, False
 
@@ -259,8 +261,85 @@ async def _polygon(canonical_id: str, provider_symbol: str, history_days: int, i
     return {"source": "polygon", "instrument_id": canonical_id, "bars": bars, "precision": "1m", "start": bars[0]["time"], "end": bars[-1]["time"], "coverage": {"requested_start": requested_start, "requested_end": cutoff - 60, "actual_start": bars[0]["time"], "actual_end": bars[-1]["time"], "cutoff_timestamp": cutoff, "test_only": False}}
 
 
+async def _alpaca_iex(canonical_id: str, provider_symbol: str, history_days: int) -> dict:
+    if not settings.alpaca_api_key or not settings.alpaca_api_secret:
+        raise DatasetError("ALPACA_CREDENTIALS_REQUIRED", "Alpaca credentials are not configured")
+    cutoff = (utc_now_seconds() // 60) * 60
+    start = cutoff - history_days * 86400
+    path = f"/v2/stocks/{provider_symbol}/bars"
+    bars: dict[int, dict] = {}
+    page_token = None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for _ in range(MAX_PAGES):
+                params = {"timeframe": "1Min", "start": datetime.fromtimestamp(start, timezone.utc).isoformat(), "end": datetime.fromtimestamp(cutoff, timezone.utc).isoformat(), "feed": "iex", "limit": 10000}
+                if page_token:
+                    params["page_token"] = page_token
+                response = await client.get(f"https://{ALPACA_DATA_HOST}{path}", params=params, headers={"APCA-API-KEY-ID": settings.alpaca_api_key, "APCA-API-SECRET-KEY": settings.alpaca_api_secret})
+                if response.status_code == 401:
+                    raise PolygonDataError("ALPACA_FORBIDDEN", "Alpaca access is not authorized")
+                if response.status_code == 429:
+                    raise PolygonDataError("ALPACA_RATE_LIMIT", "Alpaca rate limit reached; try again later")
+                if response.status_code != 200:
+                    raise PolygonDataError("ALPACA_UNAVAILABLE", "Alpaca historical data is unavailable")
+                payload = response.json()
+                for raw in payload.get("bars", []):
+                    timestamp = int(datetime.fromisoformat(str(raw["t"]).replace("Z", "+00:00")).timestamp())
+                    bar = _normalize_bar({"t": timestamp * 1000, "o": raw.get("o"), "h": raw.get("h"), "l": raw.get("l"), "c": raw.get("c"), "v": raw.get("v")}, cutoff, start)
+                    if bar:
+                        bars[bar["time"]] = bar
+                page_token = payload.get("next_page_token")
+                if not page_token:
+                    break
+            else:
+                raise DatasetCoverageError("ALPACA_BOUNDS", "Alpaca pagination exceeded the replay bound")
+    except DatasetError:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError, KeyError):
+        raise PolygonDataError("ALPACA_UNAVAILABLE", "Alpaca historical data is unavailable") from None
+    result = [bars[timestamp] for timestamp in sorted(bars)]
+    if not result:
+        raise DatasetCoverageError("COVERAGE_INSUFFICIENT", "Alpaca returned no completed one-minute bars")
+    return {"source": "alpaca_iex", "instrument_id": canonical_id, "bars": result, "precision": "1m", "start": result[0]["time"], "end": result[-1]["time"], "coverage": {"requested_start": start, "requested_end": cutoff - 60, "actual_start": result[0]["time"], "actual_end": result[-1]["time"], "cutoff_timestamp": cutoff, "test_only": False}}
+
+
+async def _alpha_vantage_fx(canonical_id: str, history_days: int) -> dict:
+    if not settings.alpha_vantage_api_key:
+        raise DatasetError("ALPHA_VANTAGE_CREDENTIALS_REQUIRED", "Alpha Vantage credentials are not configured")
+    if not canonical_id.startswith("FX:") or "-" not in canonical_id:
+        raise DatasetError("UNSUPPORTED_INSTRUMENT", "Alpha Vantage replay requires an FX instrument")
+    base, quote = canonical_id.removeprefix("FX:").split("-", 1)
+    cutoff = (utc_now_seconds() // 60) * 60
+    start = cutoff - history_days * 86400
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"https://{ALPHA_VANTAGE_HOST}/query", params={"function": "FX_INTRADAY", "from_symbol": base, "to_symbol": quote, "interval": "1min", "outputsize": "full", "apikey": settings.alpha_vantage_api_key})
+            if response.status_code != 200:
+                raise PolygonDataError("ALPHA_VANTAGE_UNAVAILABLE", "Alpha Vantage FX data is unavailable")
+            payload = response.json()
+    except DatasetError:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError):
+        raise PolygonDataError("ALPHA_VANTAGE_UNAVAILABLE", "Alpha Vantage FX data is unavailable") from None
+    if payload.get("Note") or payload.get("Information"):
+        raise PolygonDataError("ALPHA_VANTAGE_RATE_LIMIT", "Alpha Vantage request limit reached; try again later")
+    series = payload.get("Time Series FX (1min)")
+    if not isinstance(series, dict):
+        raise PolygonDataError("ALPHA_VANTAGE_UNAVAILABLE", "Alpha Vantage FX data is unavailable")
+    bars = []
+    for stamp, raw in series.items():
+        timestamp = int(datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+        bar = _normalize_bar({"t": timestamp * 1000, "o": raw.get("1. open"), "h": raw.get("2. high"), "l": raw.get("3. low"), "c": raw.get("4. close"), "v": "0"}, cutoff, start, is_fx=True)
+        if bar:
+            bars.append(bar)
+    bars.sort(key=lambda item: item["time"])
+    if not bars:
+        raise DatasetCoverageError("COVERAGE_INSUFFICIENT", "Alpha Vantage returned no completed one-minute FX bars")
+    return {"source": "alpha_vantage", "instrument_id": canonical_id, "bars": bars, "precision": "1m", "start": bars[0]["time"], "end": bars[-1]["time"], "coverage": {"requested_start": start, "requested_end": cutoff - 60, "actual_start": bars[0]["time"], "actual_end": bars[-1]["time"], "cutoff_timestamp": cutoff, "test_only": False}}
+
+
 async def load_dataset(instrument_id: str, source: str, history_days: int = 30) -> dict:
-    """Load and pin a replay dataset from ``synthetic-test`` or ``polygon``."""
+    """Load and pin a replay dataset through an approved source adapter."""
 
     if history_days not in ALLOWED_HISTORY_DAYS:
         raise DatasetError("INVALID_HISTORY_DAYS", "History must be 7, 30, 90, or 365 days")
@@ -269,6 +348,10 @@ async def load_dataset(instrument_id: str, source: str, history_days: int = 30) 
         return _store(_synthetic(canonical_id, history_days))
     if source == "polygon":
         return _store(await _polygon(canonical_id, provider_symbol, history_days, is_fx))
+    if source == "alpaca_iex":
+        return _store(await _alpaca_iex(canonical_id, provider_symbol, history_days))
+    if source == "alpha_vantage":
+        return _store(await _alpha_vantage_fx(canonical_id, history_days))
     raise DatasetError("INVALID_SOURCE", "Dataset source is not supported")
 
 

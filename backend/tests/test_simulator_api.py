@@ -29,7 +29,7 @@ def test_catalog_has_full_multi_asset_coverage_and_provider_labels():
     client, _, _ = client_and_repo()
     catalog = client.get("/api/v1/simulator/instruments").json()
     assert len(catalog) == 40
-    assert next(item for item in catalog if item["id"] == "NASDAQ:AAPL")["replay_source"] == "polygon"
+    assert next(item for item in catalog if item["id"] == "NASDAQ:AAPL")["replay_source"] == "alpaca_iex"
     assert next(item for item in catalog if item["id"] == "NSE:RELIANCE")["replay_source"] == "synthetic-test"
 
 
@@ -57,7 +57,7 @@ def test_session_uses_a_server_route_and_rejects_unapproved_legacy_provider_sele
     assert routed.status_code == 200
     assert routed.json()["data_source"] == "synthetic-test"
     assert blocked.status_code == 503
-    assert blocked.json()["detail"]["code"] == "MARKET_DATA_RIGHTS_REQUIRED"
+    assert blocked.json()["detail"]["code"] == "MARKET_DATA_UNAVAILABLE"
 
 
 def test_order_validation_requires_the_price_that_defines_each_order_type():

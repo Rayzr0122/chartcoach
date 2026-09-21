@@ -114,14 +114,15 @@ class ProviderRegistry:
             "imported": StaticAdapter("imported", ("bars", "corporate_actions")),
             "polygon": StaticAdapter("polygon", ("bars",)),
             "alpaca_iex": StaticAdapter("alpaca_iex", ("bars", "quote", "trade", "corporate_actions")),
+            "alpha_vantage": StaticAdapter("alpha_vantage", ("bars", "fx_conversion")),
             "oanda": StaticAdapter("oanda", ("quote", "financing")),
             "coinbase": StaticAdapter("coinbase", ("quote", "trade", "bars")),
         }
         for route in (
             AdapterRoute("india_equities", "replay", "imported", "NSE", ("bar",), 0, "approved-import"),
-            AdapterRoute("us_equities", "replay", "polygon", "NASDAQ", ("bar",), 900, None),
+            AdapterRoute("us_equities", "replay", "alpaca_iex", "IEX", ("bar",), 0, None),
             AdapterRoute("us_equities", "stream", "alpaca_iex", "IEX", ("quote", "trade"), 0, None),
-            AdapterRoute("fx", "stream", "oanda", "OTC", ("quote",), 0, None),
+            AdapterRoute("fx", "replay", "alpha_vantage", "OTC", ("bar",), 0, None),
             AdapterRoute("crypto", "stream", "coinbase", "COINBASE", ("quote", "trade"), 0, None),
             AdapterRoute("all", "replay", "synthetic-test", "SIM", ("bar",), 0, "internal-fixture"),
         ):

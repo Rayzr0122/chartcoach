@@ -176,8 +176,8 @@ def _instruments() -> list[dict]:
             result.append({
                 "id": f"{venue}:{symbol}", "symbol": symbol, "name": symbol, "venue": venue,
                 "asset_class": asset_class, "quote_currency": currency, "source": "synthetic-test",
-                "replay_source": "polygon" if polygon else "synthetic-test",
-                "delayed_source": "polygon-delayed" if polygon else "synthetic-test",
+                "replay_source": "alpaca_iex" if polygon else "alpha_vantage" if market == "fx" else "synthetic-test",
+                "delayed_source": "alpaca_iex" if polygon else "synthetic-test",
                 "polygon_supported": polygon, "tick_size": "0.01", "quantity_increment": "1",
                 "contract_multiplier": "10" if asset_class == "future" else "1",
                 "market": market, "supported_modes": ["replay"],
