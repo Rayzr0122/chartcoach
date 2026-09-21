@@ -11,6 +11,7 @@ export type DatasetCoverage = { start?: number | string; end?: number | string; 
 export type SimulatorSession = { id: string; mode: "replay" | "delayed" | "stream" | "drill"; instrument_id: string; clock?: number; initial_clock?: number; market_time?: number; state: string; speed: number; assisted: boolean; parent_session_id?: string; forked_at_clock?: number; revision: number; source?: string; data_source?: string; data_status?: string; coverage?: DatasetCoverage; dataset?: { coverage?: DatasetCoverage; source?: string }; total_bars?: number; account: SimulatorAccount; orders: SimulatorOrder[]; fills: SimulatorFill[]; positions?: SimulatorPosition[]; ledger?: LedgerEntry[] };
 export type Instrument = { id: string; symbol: string; venue: string; asset_class: string; quote_currency: string; source: string; replay_source?: string; delayed_source?: string; polygon_supported?: boolean; name?: string; market?: string; supported_modes?: Array<"replay" | "stream">; data_status?: string; overnight_eligible?: boolean };
 export type Journal = { plan: string; reflection: string; updated_at?: string };
+export type ChartLayout = { instrument_id: string; timeframe: Timeframe; revision: number; drawings: Array<Record<string, unknown>>; updated_at?: string };
 export type Review = { score: number; passed: boolean; assisted: boolean; dimensions: Record<string, number>; ai_review?: { available: boolean; reason?: string } };
 
 const timeframeSeconds: Record<Timeframe, number> = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1d": 86400 };
@@ -100,6 +101,8 @@ export const simulatorApi = {
   cancelOrder: (id: string, orderId: string, key: string) => request<SimulatorOrder>(`/sessions/${id}/orders/${orderId}/cancel`, keyed(key)),
   closePosition: (id: string, instrumentId: string, quantity: string, key: string) => request<unknown>(`/sessions/${id}/positions/${encodeURIComponent(instrumentId)}/close`, keyed(key, { quantity })),
   getJournal: (id: string) => request<Journal>(`/sessions/${id}/journal`),
+  chartLayout: (instrumentId: string, timeframe: Timeframe) => request<ChartLayout>(`/chart-layouts/${encodeURIComponent(instrumentId)}?timeframe=${timeframe}`),
+  saveChartLayout: (instrumentId: string, timeframe: Timeframe, layout: Pick<ChartLayout, "revision" | "drawings">) => request<ChartLayout>(`/chart-layouts/${encodeURIComponent(instrumentId)}?timeframe=${timeframe}`, { method: "PUT", body: JSON.stringify(layout) }),
   journal: (id: string, plan: string, reflection: string, key: string) => request<{ saved: boolean }>(`/sessions/${id}/journal`, keyed(key, { plan, reflection }, "PUT")),
   review: (id: string) => request<Review>(`/sessions/${id}/review`),
   resetAccount: (id: string, key: string) => request<{ account: SimulatorAccount }>(`/accounts/${id}/reset`, keyed(key, { reason: "learner_requested" })),

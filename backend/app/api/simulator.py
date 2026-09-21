@@ -85,6 +85,11 @@ class JournalUpdate(BaseModel):
     reflection: str = Field(default="", max_length=4000)
 
 
+class ChartLayoutUpdate(BaseModel):
+    revision: int = Field(ge=0)
+    drawings: list[dict[str, object]] = Field(default_factory=list, max_length=100)
+
+
 class DrillPublish(BaseModel):
     title: str = Field(min_length=3, max_length=120)
     title_hi: str = Field(default="", max_length=120)
@@ -220,6 +225,14 @@ def _aggregate(bars: list[dict], bucket_minutes: int) -> list[dict]:
             "volume": format(sum((D(item["volume"]) for item in group), Decimal(0)), "f"),
         })
     return result
+
+
+def _layout_key(user: User, instrument_id: str, timeframe: str) -> dict:
+    if not any(item["id"] == instrument_id for item in _instruments()):
+        raise HTTPException(422, detail={"code": "UNSUPPORTED_INSTRUMENT"})
+    if timeframe not in {"1m", "5m", "15m", "1h", "1d"}:
+        raise HTTPException(422, detail={"code": "INVALID_TIMEFRAME"})
+    return {"learner_id": user.id, "instrument_id": instrument_id, "timeframe": timeframe}
 
 
 def _fx_bar(dataset_id: str | None, timestamp: int) -> dict | None:
@@ -600,6 +613,35 @@ def close_position(session_id: str, instrument_id: str, payload: PositionClose, 
 @router.get("/sessions/{session_id}/journal")
 def get_journal(session_id: str, user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
     return _owned(repo, session_id, user)["session"].get("journal", {"plan": "", "reflection": ""})
+
+
+@router.get("/chart-layouts/{instrument_id}")
+def get_chart_layout(instrument_id: str, timeframe: str = Query("1m"), user: User = Depends(get_current_user), database=Depends(get_simulator_db)):
+    key = _layout_key(user, instrument_id, timeframe)
+    layout = database.simulator_chart_layouts.find_one(key, {"_id": 0})
+    return layout or {**key, "revision": 0, "drawings": []}
+
+
+@router.put("/chart-layouts/{instrument_id}")
+def save_chart_layout(instrument_id: str, payload: ChartLayoutUpdate, timeframe: str = Query("1m"), user: User = Depends(get_current_user), database=Depends(get_simulator_db)):
+    key = _layout_key(user, instrument_id, timeframe)
+    if len(json.dumps(payload.drawings, separators=(",", ":"))) > 50_000:
+        raise HTTPException(422, detail={"code": "DRAWINGS_TOO_LARGE"})
+    layouts = database.simulator_chart_layouts
+    layouts.create_index([("learner_id", 1), ("instrument_id", 1), ("timeframe", 1)], unique=True)
+    next_layout = {**key, "revision": payload.revision + 1, "drawings": payload.drawings, "updated_at": _now()}
+    if payload.revision == 0 and not layouts.find_one(key):
+        try:
+            layouts.insert_one(next_layout)
+            next_layout.pop("_id", None)
+            return next_layout
+        except Exception:
+            pass
+    saved = layouts.find_one_and_replace({**key, "revision": payload.revision}, next_layout, return_document=True)
+    if not saved:
+        raise HTTPException(409, detail={"code": "LAYOUT_REVISION_CONFLICT", "message": "The chart layout changed elsewhere. Reload and retry."})
+    saved.pop("_id", None)
+    return saved
 
 
 @router.put("/sessions/{session_id}/journal")
