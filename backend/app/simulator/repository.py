@@ -77,6 +77,9 @@ class InMemorySimulatorRepository:
     def list_active_sessions(self) -> list[dict]:
         return [copy.deepcopy(item) for item in self.sessions.values() if item.get("state") in {"playing", "paused"}]
 
+    def events_after(self, session_id: str, sequence: int, limit: int = 100) -> list[dict]:
+        return [copy.deepcopy(event) for event in self.outbox if event["session_id"] == session_id and event.get("sequence", 0) > sequence][:limit]
+
     def snapshot(self, session_id: str) -> dict | None:
         session = self.get_session(session_id)
         if not session:
@@ -114,7 +117,10 @@ class InMemorySimulatorRepository:
         for name in ("orders", "positions", "fills", "ledger"):
             if name in changes:
                 self.records[(account_id, name)] = copy.deepcopy(changes[name])
-        self.outbox.extend({"session_id": session_id, "account_id": account_id, **event} for event in changes.get("events", []))
+        next_sequence = max((event.get("sequence", 0) for event in self.outbox if event["session_id"] == session_id), default=0)
+        for event in changes.get("events", []):
+            next_sequence += 1
+            self.outbox.append({"session_id": session_id, "account_id": account_id, "sequence": next_sequence, **event})
         self.idempotency[token] = {"fingerprint": fingerprint, "response": copy.deepcopy(response)}
         return copy.deepcopy(response)
 
@@ -203,6 +209,9 @@ class MongoSimulatorRepository:
     def list_active_sessions(self) -> list[dict]:
         return list(self.db.simulator_sessions.find({"state": {"$in": ["playing", "paused"]}}, {"_id": 0}))
 
+    def events_after(self, session_id: str, sequence: int, limit: int = 100) -> list[dict]:
+        return list(self.db.simulator_outbox.find({"session_id": session_id, "sequence": {"$gt": sequence}}, {"_id": 0}).sort("sequence", 1).limit(limit))
+
     def snapshot(self, session_id: str, mongo_session=None) -> dict | None:
         session = self.db.simulator_sessions.find_one({"id": session_id}, {"_id": 0}, session=mongo_session)
         if not session:
@@ -265,8 +274,9 @@ class MongoSimulatorRepository:
                         for name in ("fills", "ledger"):
                             if name in changes:
                                 self._append_records(name, account_id, changes[name], mongo_session)
-                        for event in changes.get("events", []):
-                            self.db.simulator_outbox.update_one({"id": event["id"]}, {"$setOnInsert": {"session_id": session_id, "account_id": account_id, "published_at": None, **event}}, upsert=True, session=mongo_session)
+                        for offset, event in enumerate(changes.get("events", []), start=1):
+                            sequence = expected_session * 100 + offset
+                            self.db.simulator_outbox.update_one({"id": event["id"]}, {"$setOnInsert": {"session_id": session_id, "account_id": account_id, "sequence": sequence, "published_at": None, **event}}, upsert=True, session=mongo_session)
                         self.db.simulator_idempotency.insert_one({"session_id": session_id, "key": key, "fingerprint": fingerprint, "response": response}, session=mongo_session)
                         return response
             except IdempotencyConflict:

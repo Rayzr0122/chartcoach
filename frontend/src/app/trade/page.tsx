@@ -79,9 +79,20 @@ export default function TradePage() {
   }, [refresh]);
   useEffect(() => {
     if (!session) return;
-    const timer = setInterval(() => refresh(session.id).catch(setError), 1800);
-    return () => clearInterval(timer);
-  }, [session?.id, refresh]);
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(`${protocol}//${location.hostname}:8000/api/v1/simulator/ws?session_id=${encodeURIComponent(session.id)}`);
+    socket.onmessage = (message) => {
+      try {
+        const update = JSON.parse(message.data) as { payload?: SimulatorSession };
+        if (!update.payload) return;
+        setSession(update.payload);
+        void simulatorApi.candles(update.payload.id, { limit: 700, timeframe }).then(setCandles).catch(setError);
+      } catch {
+        setError(new Error("The simulator event stream returned an invalid update."));
+      }
+    };
+    return () => socket.close();
+  }, [session?.id, timeframe]);
   useEffect(() => {
     if (!session || session.state !== "playing" || session.mode !== "replay")
       return;

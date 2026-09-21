@@ -637,6 +637,11 @@ async def simulator_ws(websocket: WebSocket):
     token = websocket.cookies.get(AUTH_COOKIE_NAME)
     email = decode_access_token(token) if token else None
     session_id = websocket.query_params.get("session_id")
+    try:
+        cursor = max(0, int(websocket.query_params.get("cursor", "0")))
+    except ValueError:
+        await websocket.close(code=1008, reason="Invalid event cursor")
+        return
     user = User.from_doc(application_db.users.find_one({"email": email})) if email else None
     repo = MongoSimulatorRepository(get_simulator_db())
     if not user or not session_id:
@@ -647,14 +652,15 @@ async def simulator_ws(websocket: WebSocket):
         await websocket.close(code=1008, reason="Simulator access denied")
         return
     await websocket.accept()
-    last_revision = -1
     try:
+        if cursor == 0:
+            await websocket.send_json({"type": "snapshot", "sequence": 0, "revision": state["session"].get("revision", 0), "cursor": 0, "payload": _snapshot(state)})
         while True:
-            state = repo.snapshot(session_id)
-            revision = state["session"].get("revision", 0)
-            if revision != last_revision:
-                await websocket.send_json({"type": "snapshot", "revision": revision, "payload": _snapshot(state)})
-                last_revision = revision
-            await asyncio.sleep(1)
+            events = repo.events_after(session_id, cursor)
+            for event in events:
+                cursor = event["sequence"]
+                state = repo.snapshot(session_id)
+                await websocket.send_json({"type": "delta", "sequence": cursor, "revision": state["session"].get("revision", 0), "cursor": cursor, "event": event, "payload": _snapshot(state)})
+            await asyncio.sleep(0.25)
     except WebSocketDisconnect:
         return

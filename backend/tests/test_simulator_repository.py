@@ -14,8 +14,20 @@ def test_transaction_commits_financial_state_idempotency_and_outbox_together():
     assert response == retry == {"id": "o1"}
     assert repo.snapshot("s1")["account"]["cash"] == "900.00"
     assert repo.outbox[0]["type"] == "order.created"
+    assert repo.outbox[0]["sequence"] == 1
     with pytest.raises(IdempotencyConflict):
         repo.mutate("s1", "order:k1", "hash-b", lambda state: ({}, {}))
+
+
+def test_outbox_events_are_resumable_by_session_sequence():
+    repo = InMemorySimulatorRepository()
+    repo.create_account({"id": "a1", "learner_id": "u1", "cash": "1000.00"})
+    repo.create_session({"id": "s1", "learner_id": "u1", "account_id": "a1", "revision": 1})
+    for number in (1, 2):
+        repo.mutate("s1", f"event:{number}", str(number), lambda state, number=number: ({"ok": True}, {"events": [{"id": f"evt-{number}", "type": "session.updated"}]}))
+
+    assert [event["sequence"] for event in repo.events_after("s1", 0)] == [1, 2]
+    assert [event["id"] for event in repo.events_after("s1", 1)] == ["evt-2"]
 
 
 def test_sessions_on_same_account_share_positions_and_account_revision():
