@@ -1,6 +1,26 @@
 import pytest
 
-from app.simulator.repository import IdempotencyConflict, InMemorySimulatorRepository
+from app.simulator.repository import IdempotencyConflict, InMemorySimulatorRepository, MongoSimulatorRepository
+
+
+class IndexCollection:
+    def __init__(self):
+        self.indexes = []
+
+    def create_index(self, keys, **options):
+        self.indexes.append((keys, options))
+
+
+class IndexDatabase:
+    def __init__(self):
+        self.simulator_accounts = IndexCollection()
+        self.simulator_sessions = IndexCollection()
+        self.simulator_idempotency = IndexCollection()
+        self.simulator_outbox = IndexCollection()
+        self.collections = {name: IndexCollection() for name in ("orders", "positions", "fills", "ledger")}
+
+    def __getitem__(self, name):
+        return self.collections[name.removeprefix("simulator_")]
 
 
 def test_transaction_commits_financial_state_idempotency_and_outbox_together():
@@ -29,6 +49,15 @@ def test_outbox_events_are_resumable_by_session_sequence():
     assert [event["sequence"] for event in repo.events_after("s1", 0)] == [1, 2]
     assert [event["id"] for event in repo.events_after("s1", 1)] == ["evt-2"]
     assert repo.event_bounds("s1") == (1, 2)
+
+
+def test_outbox_index_ignores_legacy_rows_without_a_sequence():
+    database = IndexDatabase()
+    MongoSimulatorRepository(database).ensure_indexes()
+
+    assert database.simulator_outbox.indexes == [
+        ([('session_id', 1), ('sequence', 1)], {"unique": True, "partialFilterExpression": {"sequence": {"$type": "number"}}})
+    ]
 
 
 def test_sessions_on_same_account_share_positions_and_account_revision():

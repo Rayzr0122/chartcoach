@@ -144,3 +144,86 @@ def test_resting_limit_only_fills_when_a_qualifying_trade_prints():
     assert result.fills[0]["quantity"] == "1"
     assert result.orders[0]["status"] == "open"
     assert result.orders[0]["quantity"] == "1"
+
+
+def test_short_sale_and_partial_cover_keep_a_signed_position_and_reconcile_margin():
+    opened = process_bar(
+        account(), [], [order(side="sell", quantity="2", position_effect="open_short")],
+        bar(o="100", c="90"), clock=1, instrument_id="NASDAQ:AAPL",
+        shortable=True, initial_margin_rate=Decimal("0.5"),
+    )
+
+    assert opened.positions[0]["quantity"] == "-2"
+    assert opened.account["cash"] == "1200.00"
+    assert opened.account["reserved"] == "90.00"
+    assert opened.account["equity"] == "1020.00"
+
+    covered = process_bar(
+        opened.account, opened.positions,
+        [order(id="cover", side="buy", quantity="1", position_effect="close_short")],
+        bar(o="80", c="80", t=120), clock=2, instrument_id="NASDAQ:AAPL",
+        shortable=True, initial_margin_rate=Decimal("0.5"),
+    )
+
+    assert covered.positions[0]["quantity"] == "-1"
+    assert covered.account["realized_pnl"] == "20.00"
+    assert covered.account["reserved"] == "40.00"
+    assert covered.account["equity"] == "1040.00"
+
+
+def test_short_borrow_fee_is_charged_once_on_each_new_market_day():
+    opened = process_bar(
+        account("5000"), [], [order(side="sell", quantity="100", position_effect="open_short")],
+        bar(o="100", c="100", t=86_400), clock=1, instrument_id="NASDAQ:AAPL",
+        shortable=True, borrow_rate_bps=Decimal("300"),
+    )
+    held = process_bar(
+        opened.account, opened.positions, [], bar(o="100", c="100", t=172_800), clock=2,
+        instrument_id="NASDAQ:AAPL", shortable=True, borrow_rate_bps=Decimal("300"),
+    )
+
+    assert held.account["cash"] == "14999.18"
+    assert held.account["realized_pnl"] == "-0.82"
+    assert held.ledger[-1]["amount"] == "-0.82"
+
+
+def test_margin_breach_cancels_new_exposure_and_liquidates_the_short_at_the_mark():
+    opened = process_bar(
+        account(), [], [order(side="sell", quantity="10", position_effect="open_short")],
+        bar(o="100", c="100"), clock=1, instrument_id="NASDAQ:AAPL",
+        shortable=True, initial_margin_rate=Decimal("0.5"), maintenance_margin_rate=Decimal("0.3"),
+    )
+    breached = process_bar(
+        opened.account, opened.positions,
+        [order(id="new-long", order_type="limit", limit_price="1", quantity="1", position_effect="open_long", reserved="1")],
+        bar(o="200", h="200", l="200", c="200", t=120), clock=2, instrument_id="NASDAQ:AAPL",
+        shortable=True, initial_margin_rate=Decimal("0.5"), maintenance_margin_rate=Decimal("0.3"),
+    )
+
+    assert breached.positions == []
+    assert breached.account["margin_state"] == "liquidated"
+    assert next(order for order in breached.orders if order["id"] == "new-long")["status"] == "cancelled"
+    assert breached.fills[-1]["liquidation"] is True
+
+
+def test_fx_long_uses_margin_without_debiting_the_full_notional():
+    result = process_bar(
+        account(), [], [order(quantity="100", position_effect="open_long")],
+        bar(o="10", c="10"), clock=1, instrument_id="FX:EUR-USD",
+        shortable=True, initial_margin_rate=Decimal("0.05"), maintenance_margin_rate=Decimal("0.025"),
+        leveraged=True, margin_for_longs=True,
+    )
+
+    assert result.account["cash"] == "1000.00"
+    assert result.account["equity"] == "1000.00"
+    assert result.account["reserved"] == "50.00"
+
+
+def test_day_order_expires_when_the_replay_reaches_the_next_market_day():
+    result = process_bar(
+        account(), [], [order(order_type="limit", limit_price="1", time_in_force="DAY", submitted_market_day=0)],
+        bar(o="100", h="100", l="100", c="100", t=86_400), clock=1,
+    )
+
+    assert result.orders[0]["status"] == "cancelled"
+    assert result.orders[0]["rejection_reason"] == "DAY_EXPIRED"

@@ -30,6 +30,7 @@ STARTING_EQUITY = "1000000.00"
 EXECUTION_PROFILES = {
     "cash_equity_dev_v1": {"fee_bps": Decimal("5"), "slippage_bps": Decimal("2"), "spread_bps": Decimal("5")},
     "crypto_spot_dev_v1": {"fee_bps": Decimal("10"), "slippage_bps": Decimal("5"), "spread_bps": Decimal("0")},
+    "fx_dev_v1": {"fee_bps": Decimal("0"), "slippage_bps": Decimal("2"), "spread_bps": Decimal("0")},
 }
 
 
@@ -57,6 +58,7 @@ class OrderCreate(BaseModel):
     take_profit: Decimal | None = Field(default=None, gt=0)
     time_in_force: str = Field(default="GTC", pattern="^(DAY|GTC)$")
     reduce_only: bool = False
+    position_effect: str = Field(default="auto", pattern="^(auto|open_long|close_long|open_short|close_short)$")
 
     @model_validator(mode="after")
     def require_trigger_prices(self):
@@ -80,9 +82,19 @@ class AccountReset(BaseModel):
     reason: str = Field(default="learner_requested", max_length=120)
 
 
+class PreTradePlan(BaseModel):
+    thesis: str = Field(min_length=3, max_length=2000)
+    entry_condition: str = Field(min_length=3, max_length=1000)
+    quantity: Decimal = Field(gt=0)
+    stop: Decimal = Field(gt=0)
+    target: Decimal = Field(gt=0)
+    maximum_risk: Decimal = Field(gt=0)
+
+
 class JournalUpdate(BaseModel):
     plan: str = Field(default="", max_length=4000)
     reflection: str = Field(default="", max_length=4000)
+    pre_trade_plan: PreTradePlan | None = None
 
 
 class ChartLayoutUpdate(BaseModel):
@@ -96,6 +108,21 @@ class DrillPublish(BaseModel):
     instrument_id: str
     objective: str = Field(min_length=3, max_length=1000)
     required: bool = False
+
+
+class DrillDraft(BaseModel):
+    title: str = Field(min_length=3, max_length=120)
+    title_hi: str = Field(default="", max_length=120)
+    instrument_id: str
+    dataset_id: str
+    objective: str = Field(min_length=3, max_length=1000)
+    rubric: dict[str, int] = Field(default_factory=lambda: {"risk_sizing": 40, "stop_coverage": 25, "plan_adherence": 20, "execution_discipline": 15})
+    profile_version: str = "cash_equity_dev_v1"
+    required: bool = False
+
+
+class DrillRetire(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
 
 
 def get_simulator_repository(database=Depends(get_simulator_db)):
@@ -142,6 +169,7 @@ def _snapshot(state: dict) -> dict:
     session = state["session"]
     if "account_id" not in session:
         return {**{key: value for key, value in session.items() if key != "_id"}, "legacy_read_only": True, "data_status": "legacy"}
+    instrument = next((item for item in _instruments() if item["id"] == session["instrument_id"]), {})
     return {
         "id": session["id"], "mode": session["mode"], "instrument_id": session["instrument_id"],
         "dataset_id": session["dataset_id"], "fx_dataset_id": session.get("fx_dataset_id"),
@@ -153,6 +181,10 @@ def _snapshot(state: dict) -> dict:
         "assisted": session.get("assisted", False), "revision": session["revision"],
         "legacy_read_only": False, "data_status": session.get("data_status", "ready"),
         "coverage": session.get("coverage", {}), "total_bars": session.get("total_bars", 0),
+        "engine_version": session.get("engine_version"), "profile_version": session.get("profile_version"),
+        "accounting_version": session.get("accounting_version", "ledger_v2"), "data_resolution": session.get("data_resolution"),
+        "unavailable_reason": session.get("unavailable_reason"),
+        "shorting": {key: instrument.get(key) for key in ("shortable", "initial_margin_rate", "maintenance_margin_rate", "borrow_rate_bps", "supported_position_effects")},
         "account": state["account"], "positions": state["positions"], "orders": state["orders"],
         "fills": state["fills"], "ledger": state["ledger"],
     }
@@ -168,6 +200,14 @@ def _mutation(repo, state: dict, key: str, scope: str, payload: object, operatio
 
 
 def _instruments() -> list[dict]:
+    registry = _provider_registry()
+
+    def provider_for(market: str, mode: str) -> str | None:
+        try:
+            return registry.select(market, mode, "development").provider
+        except MarketDataError:
+            return None
+
     groups = [
         ("NSE", "stock", "INR", ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "ITC", "LT", "BHARTIARTL", "MARUTI", "SUNPHARMA", "AXISBANK"]),
         ("NASDAQ", "stock", "USD", ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "NFLX", "COST", "AVGO", "INTC"]),
@@ -182,23 +222,45 @@ def _instruments() -> list[dict]:
             market = {
                 "NSE": "india_equities", "NASDAQ": "us_equities", "CRYPTO": "crypto", "FX": "fx",
             }.get(venue, "futures")
+            replay_provider = provider_for(market, "replay") or "synthetic-test"
+            stream_provider = provider_for(market, "stream")
             tick_size, quantity_increment = ("0.01", "0.00000001") if asset_class == "spot_crypto" else ("0.0001", "1000") if asset_class == "forex" else ("0.01", "1")
+            shortable = market == "us_equities" or asset_class == "forex"
+            initial_margin_rate = "0.05" if asset_class == "forex" else "0.50" if shortable else None
+            maintenance_margin_rate = "0.025" if asset_class == "forex" else "0.30" if shortable else None
             result.append({
                 "id": f"{venue}:{symbol}", "symbol": symbol, "name": symbol, "venue": venue,
-                "asset_class": asset_class, "quote_currency": currency, "source": "synthetic-test",
-                "replay_source": "alpaca_iex" if polygon else "alpha_vantage" if market == "fx" else "synthetic-test",
-                "delayed_source": "alpaca_iex" if polygon else "synthetic-test",
+                "asset_class": asset_class, "quote_currency": "INR" if venue == "FX" and symbol == "USD-INR" else currency, "source": replay_provider,
+                "replay_source": replay_provider, "delayed_source": stream_provider,
                 "polygon_supported": polygon, "tick_size": tick_size, "quantity_increment": quantity_increment,
                 "contract_multiplier": "10" if asset_class == "future" else "1",
-                "market": market, "supported_modes": ["replay"],
-                "data_status": "synthetic_test" if market != "india_equities" else "approved_import_required",
+                "market": market, "supported_modes": ["replay", *( ["stream"] if stream_provider else [] )],
+                "data_status": "live_ready" if stream_provider else "synthetic_test" if replay_provider == "synthetic-test" else "replay_ready" if market != "india_equities" else "approved_import_required",
                 "overnight_eligible": market == "india_equities",
+                "shortable": shortable,
+                "initial_margin_rate": initial_margin_rate,
+                "maintenance_margin_rate": maintenance_margin_rate,
+                "borrow_rate_bps": "300" if market == "us_equities" else "0",
+                "supported_position_effects": ["auto", "open_long", "close_long", "open_short", "close_short"] if shortable else ["auto", "open_long", "close_long"],
             })
     return result
 
 
 def _profile_version(instrument: dict) -> str:
-    return "crypto_spot_dev_v1" if instrument["asset_class"] == "spot_crypto" else "cash_equity_dev_v1"
+    if instrument["asset_class"] == "spot_crypto":
+        return "crypto_spot_dev_v1"
+    return "fx_dev_v1" if instrument["asset_class"] == "forex" else "cash_equity_dev_v1"
+
+
+def _order_effect(payload: OrderCreate, position: dict | None) -> str:
+    if payload.position_effect != "auto":
+        return payload.position_effect
+    held = D(position["quantity"]) if position else Decimal("0")
+    if payload.reduce_only:
+        return "close_long" if payload.side == "sell" else "close_short"
+    if payload.side == "buy":
+        return "close_short" if held < 0 else "open_long"
+    return "close_long" if held > 0 else "open_short"
 
 
 def _validate_order_precision(instrument_id: str, quantity: Decimal, *prices: Decimal | None) -> None:
@@ -253,7 +315,7 @@ def _session_source(payload: SessionCreate, instrument: dict) -> str:
         except MarketDataError:
             raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "No approved market-data route is active for this market."}) from None
     if payload.source == "synthetic-test":
-        if payload.mode == "stream":
+        if mode == "stream":
             raise HTTPException(503, detail={"code": "MARKET_DATA_UNAVAILABLE", "message": "No approved streaming provider is active for this market."})
         return "synthetic-test"
     try:
@@ -267,6 +329,7 @@ def _session_source(payload: SessionCreate, instrument: dict) -> str:
 def advance_state(current: dict, count: int = 1) -> tuple:
     session = {**current["session"]}
     dataset = _dataset(session["dataset_id"])
+    instrument = next(item for item in _instruments() if item["id"] == session["instrument_id"])
     end = min(session["clock"] + count, len(dataset["bars"]))
     account = current["account"]
     positions, orders = current["positions"], current["orders"]
@@ -280,6 +343,12 @@ def advance_state(current: dict, count: int = 1) -> tuple:
             instrument_id=session["instrument_id"], fx_rate=D(fx["close"]) if fx else Decimal("1"),
             fx_cost_bps=Decimal("5") if fx else Decimal("0"),
             spread_bps=profile["spread_bps"], slippage_bps=profile["slippage_bps"],
+            shortable=instrument["shortable"],
+            initial_margin_rate=D(instrument["initial_margin_rate"] or "1"),
+            maintenance_margin_rate=D(instrument["maintenance_margin_rate"] or "1"),
+            borrow_rate_bps=D(instrument["borrow_rate_bps"]),
+            leveraged=instrument["asset_class"] == "forex",
+            margin_for_longs=instrument["asset_class"] == "forex",
         )
         account, positions, orders = result.account, result.positions, result.orders
         fills.extend(result.fills)
@@ -311,15 +380,22 @@ def bootstrap(user: User = Depends(get_current_user), repo=Depends(get_simulator
 @router.post("/sessions")
 async def create_session(payload: SessionCreate, idempotency_key: str = Header(..., alias="Idempotency-Key"), user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
     _require_paid(user)
-    instrument = next((item for item in _instruments() if item["id"] == payload.instrument_id), None)
+    drill = get_simulator_db().simulator_drills.find_one({"id": payload.drill_id, "state": "published"}, {"_id": 0}) if payload.drill_id else None
+    if payload.drill_id and not drill:
+        raise HTTPException(404, detail={"code": "DRILL_NOT_AVAILABLE", "message": "This drill is not available for practice."})
+    if drill and payload.mode != "replay":
+        raise HTTPException(422, detail={"code": "DRILL_REPLAY_ONLY", "message": "Published drills use their pinned replay dataset."})
+    instrument_id = drill["instrument_id"] if drill else payload.instrument_id
+    instrument = next((item for item in _instruments() if item["id"] == instrument_id), None)
     if not instrument:
         raise HTTPException(422, detail={"code": "UNSUPPORTED_INSTRUMENT", "message": "The selected instrument is not available."})
     if payload.history_days not in {7, 30, 90, 365}:
         raise HTTPException(422, detail={"code": "INVALID_HISTORY_DAYS", "message": "History must be 7, 30, 90 or 365 days."})
-    source = _session_source(payload, instrument)
+    source = drill.get("data_source") if drill else _session_source(payload, instrument)
+    session_mode = "stream" if payload.mode in {"stream", "delayed"} else payload.mode
     try:
-        dataset = await load_dataset(payload.instrument_id, source, payload.history_days)
-        fx_dataset = await load_dataset("FX:USD-INR", "polygon", payload.history_days) if source == "polygon" and payload.instrument_id.startswith("NASDAQ:") else None
+        dataset = get_dataset(drill["dataset_id"]) if drill else await load_dataset(instrument_id, source, payload.history_days)
+        fx_dataset = await load_dataset("FX:USD-INR", "alpha_vantage", payload.history_days) if instrument["quote_currency"] != "INR" else None
     except DatasetError as error:
         raise HTTPException(503, detail={"code": error.code, "message": error.message}) from None
     account_mode = "delayed" if payload.mode in {"delayed", "stream"} else "replay"
@@ -331,17 +407,18 @@ async def create_session(payload: SessionCreate, idempotency_key: str = Header(.
             "buying_power": STARTING_EQUITY, "reserved": "0.00", "realized_pnl": "0.00",
             "unrealized_pnl": "0.00", "revision": 1, "created_at": _now(),
         }
-    initial_clock = min(300, max(0, len(dataset["bars"]) - (1 if payload.mode in {"delayed", "stream"} else 0)))
+    initial_clock = len(dataset["bars"]) if session_mode == "stream" else min(300, len(dataset["bars"]))
     session = {
         "id": f"sim_{uuid4().hex}", "learner_id": user.id, "account_id": account["id"],
-        "mode": "stream" if payload.mode == "stream" else payload.mode, "instrument_id": payload.instrument_id, "dataset_id": dataset["id"],
+        "mode": session_mode, "instrument_id": instrument_id, "dataset_id": dataset["id"],
         "fx_dataset_id": fx_dataset["id"] if fx_dataset else None, "data_source": dataset["source"],
         "history_days": payload.history_days, "clock": initial_clock, "initial_clock": initial_clock,
         "market_time": dataset["bars"][initial_clock - 1]["time"] if initial_clock else None,
-        "state": "paused", "speed": 5, "revision": 1, "coverage": dataset["coverage"],
+        "state": "playing" if payload.mode in {"stream", "delayed"} else "paused", "speed": 5, "revision": 1, "coverage": dataset["coverage"],
         "total_bars": len(dataset["bars"]), "data_status": "ready", "created_at": _now(),
-        "drill_id": payload.drill_id, "assisted": False, "engine_version": "quote_trade_v1" if payload.mode == "stream" else "candle_replay_v1",
-        "profile_version": _profile_version(instrument), "migration_status": "native",
+        "drill_id": payload.drill_id, "drill_version": drill.get("version") if drill else None, "drill_objective": drill.get("objective") if drill else None,
+        "drill_rubric": drill.get("rubric") if drill else None, "assisted": False, "engine_version": "quote_trade_v1" if session_mode == "stream" else "candle_replay_v1",
+        "profile_version": drill.get("profile_version", _profile_version(instrument)) if drill else _profile_version(instrument), "accounting_version": "ledger_v2", "data_resolution": dataset.get("precision"), "migration_status": "native",
     }
     try:
         state = repo.create_session_bundle(user.id, idempotency_key, _fingerprint("session", payload.model_dump(mode="json")), account, session)
@@ -477,6 +554,8 @@ def control(session_id: str, payload: Control, idempotency_key: str = Header(...
             changes.update(account=account, positions=positions, orders=orders, fills=fills, ledger=ledger)
         elif payload.action in {"play", "pause"}:
             session["state"] = "playing" if payload.action == "play" else "paused"
+            if payload.action == "play" and session["mode"] == "replay":
+                session.update(controller_heartbeat_at=stamp, controller_lease_seconds=15)
         elif payload.action == "speed":
             if payload.value not in {5, 10, 20, 30}:
                 raise HTTPException(422, detail={"code": "INVALID_REPLAY_SPEED"})
@@ -510,17 +589,42 @@ def create_order(session_id: str, payload: OrderCreate, idempotency_key: str = H
     order_id, stamp = f"ord_{uuid4().hex}", _now()
 
     def operation(current):
-        if payload.side == "sell" and not payload.reduce_only:
-            raise HTTPException(422, detail={"code": "LONG_ONLY", "message": "This educational cash preset is long-only."})
         session = current["session"]
+        instrument = next(item for item in _instruments() if item["id"] == session["instrument_id"])
+        position = next((item for item in current["positions"] if item["instrument_id"] == session["instrument_id"]), None)
+        effect = _order_effect(payload, position)
+        expected_side = {"open_long": "buy", "close_long": "sell", "open_short": "sell", "close_short": "buy"}[effect]
+        if payload.side != expected_side:
+            raise HTTPException(422, detail={"code": "INVALID_POSITION_EFFECT", "message": "The selected action and order side do not match."})
+        if effect not in instrument["supported_position_effects"]:
+            raise HTTPException(422, detail={"code": "SHORT_NOT_AVAILABLE", "message": "Short selling is not available for this instrument."})
+        held = D(position["quantity"]) if position else Decimal("0")
+        if effect == "close_long" and held <= 0 or effect == "close_short" and held >= 0:
+            raise HTTPException(409, detail={"code": "NO_POSITION_TO_CLOSE", "message": "There is no matching open position to close."})
         _validate_order_precision(session["instrument_id"], payload.quantity, payload.limit_price, payload.stop_price, payload.stop_loss, payload.take_profit)
         dataset = _dataset(session["dataset_id"])
         if not session["clock"]:
             raise HTTPException(409, detail={"code": "NO_VISIBLE_PRICE"})
         reference = payload.limit_price or payload.stop_price or D(dataset["bars"][session["clock"] - 1]["close"])
         fx = _fx_bar(session.get("fx_dataset_id"), dataset["bars"][session["clock"] - 1]["time"])
-        reserve = reference * payload.quantity * (D(fx["close"]) if fx else Decimal("1")) * Decimal("1.001") if payload.side == "buy" else Decimal("0")
+        reporting_reference = reference * (D(fx["close"]) if fx else Decimal("1"))
+        reserve_rate = Decimal("1.001") if effect == "open_long" else D(instrument["initial_margin_rate"] or "0") if effect == "open_short" else Decimal("0")
+        reserve = reporting_reference * payload.quantity * reserve_rate
         account = {**current["account"]}
+        if effect in {"open_long", "open_short"} and account.get("margin_state") in {"margin_call", "liquidated"}:
+            raise HTTPException(409, detail={"code": "MARGIN_RESTRICTED", "message": "This account is restricted to risk-reducing orders after a margin event."})
+        if effect == "open_short" and instrument["market"] == "us_equities":
+            def short_notional(item: dict) -> Decimal:
+                if D(item.get("quantity", 0)) >= 0:
+                    return Decimal("0")
+                return abs(D(item["quantity"])) * D(item.get("market_price", item.get("average_price", 0))) * D(item.get("fx_rate", 1))
+
+            pending = sum((D(item.get("reserved", 0)) / D(item.get("initial_margin_rate") or instrument["initial_margin_rate"]) for item in current["orders"] if item.get("status") == "open" and item.get("position_effect") == "open_short"), Decimal("0"))
+            same_instrument = sum((short_notional(item) for item in current["positions"] if item["instrument_id"] == session["instrument_id"]), Decimal("0"))
+            gross_short = sum((short_notional(item) for item in current["positions"]), Decimal("0")) + pending
+            equity = max(D(account["equity"]), Decimal("0"))
+            if same_instrument + reporting_reference * payload.quantity > equity * Decimal("0.20") or gross_short + reporting_reference * payload.quantity > equity * Decimal("0.50"):
+                raise HTTPException(409, detail={"code": "SHORT_EXPOSURE_LIMIT", "message": "The order exceeds the practice account short-exposure limit."})
         if D(account["cash"]) - D(account["reserved"]) < reserve:
             raise HTTPException(409, detail={"code": "INSUFFICIENT_BUYING_POWER", "message": "Order exceeds available virtual buying power."})
         account["reserved"] = money(D(account["reserved"]) + reserve)
@@ -533,7 +637,10 @@ def create_order(session_id: str, payload: OrderCreate, idempotency_key: str = H
             "stop_loss": money(payload.stop_loss) if payload.stop_loss else None,
             "take_profit": money(payload.take_profit) if payload.take_profit else None,
             "status": "open", "submitted_clock": session["clock"], "reduce_only": payload.reduce_only,
-            "time_in_force": payload.time_in_force, "reserved": money(reserve), "created_at": stamp,
+            "time_in_force": payload.time_in_force, "submitted_market_day": dataset["bars"][session["clock"] - 1]["time"] // 86_400,
+            "reserved": money(reserve), "created_at": stamp,
+            "position_effect": effect, "initial_margin_rate": instrument["initial_margin_rate"],
+            "maintenance_margin_rate": instrument["maintenance_margin_rate"],
         }
         orders = [*current["orders"], order]
         return order, {"account": account, "orders": orders, "events": [{"id": f"evt_{order_id}", "type": "order.created", "created_at": stamp}]}
@@ -559,12 +666,13 @@ def amend_order(session_id: str, order_id: str, payload: OrderAmend, idempotency
         if payload.stop_price is not None:
             order["stop_price"] = money(payload.stop_price)
         changes = {"orders": orders}
-        if order["side"] == "buy":
+        if order.get("position_effect", "auto") in {"open_long", "open_short"}:
             session = current["session"]
             dataset = _dataset(session["dataset_id"])
             reference = D(order.get("limit_price") or order.get("stop_price") or dataset["bars"][session["clock"] - 1]["close"])
             fx = _fx_bar(session.get("fx_dataset_id"), dataset["bars"][session["clock"] - 1]["time"])
-            next_reserve = reference * D(order["quantity"]) * (D(fx["close"]) if fx else Decimal("1")) * Decimal("1.001")
+            reserve_rate = Decimal("1.001") if order.get("position_effect") == "open_long" else D(order.get("initial_margin_rate") or "0")
+            next_reserve = reference * D(order["quantity"]) * (D(fx["close"]) if fx else Decimal("1")) * reserve_rate
             account = {**current["account"]}
             available = D(account["cash"]) - D(account["reserved"]) + D(order.get("reserved", 0))
             if available < next_reserve:
@@ -606,8 +714,14 @@ def close_position(session_id: str, instrument_id: str, payload: PositionClose, 
     position = next((item for item in state["positions"] if item["instrument_id"] == instrument_id), None)
     if not position:
         raise HTTPException(404, detail="Position not found.")
-    quantity = min(payload.quantity or D(position["quantity"]), D(position["quantity"]))
-    return create_order(session_id, OrderCreate(side="sell", order_type="market", quantity=quantity, reduce_only=True), idempotency_key, user, repo)
+    held = D(position["quantity"])
+    quantity = min(payload.quantity or abs(held), abs(held))
+    if instrument_id != state["session"]["instrument_id"]:
+        matching = next((item for item in repo.list_sessions(user.id) if item.get("account_id") == state["session"]["account_id"] and item.get("instrument_id") == instrument_id and item.get("state") == "playing" and item.get("mode") == "stream"), None)
+        if not matching:
+            raise HTTPException(409, detail={"code": "POSITION_SESSION_REQUIRED", "message": "Open market practice for this position's instrument to close it using its own feed."})
+        session_id = matching["id"]
+    return create_order(session_id, OrderCreate(side="sell" if held > 0 else "buy", order_type="market", quantity=quantity, reduce_only=True), idempotency_key, user, repo)
 
 
 @router.get("/sessions/{session_id}/journal")
@@ -649,7 +763,7 @@ def save_journal(session_id: str, payload: JournalUpdate, idempotency_key: str =
     state = _owned(repo, session_id, user)
 
     def operation(current):
-        session = {**current["session"], "journal": {**payload.model_dump(), "updated_at": _now()}}
+        session = {**current["session"], "journal": {**payload.model_dump(mode="json"), "updated_at": _now()}}
         return session["journal"], {"session": session}
 
     return _mutation(repo, state, idempotency_key, "journal", payload.model_dump(), operation)
@@ -659,11 +773,31 @@ def save_journal(session_id: str, payload: JournalUpdate, idempotency_key: str =
 def review(session_id: str, user: User = Depends(get_current_user), repo=Depends(get_simulator_repository)):
     state = _owned(repo, session_id, user)
     journal = state["session"].get("journal", {})
+    plan = journal.get("pre_trade_plan") or {}
+    entries = [fill for fill in state["fills"] if fill.get("position_effect") in {"open_long", "open_short"}]
     has_stop = any(order.get("stop_loss") or order.get("order_type") == "stop_market" for order in state["orders"])
-    dimensions = {"risk_sizing": 40 if has_stop else 10, "plan_adherence": 35 if journal.get("plan") else 0, "execution_discipline": 25 if journal.get("reflection") else 10}
+    entry = D(entries[0]["price"]) if entries else None
+    declared_risk = abs(entry - D(plan["stop"])) * D(plan["quantity"]) if entry and plan.get("stop") and plan.get("quantity") else None
+    risk_within_plan = declared_risk is not None and declared_risk <= D(plan.get("maximum_risk", 0))
+    dimensions = {
+        "risk_sizing": 40 if risk_within_plan else 20 if plan else 0,
+        "stop_coverage": 25 if has_stop else 0,
+        "plan_adherence": 20 if all(plan.get(key) for key in ("thesis", "entry_condition", "target")) else 0,
+        "execution_discipline": 15 if entries and journal.get("reflection") else 5 if entries else 0,
+    } if plan else {
+        "risk_sizing": 40 if has_stop else 10,
+        "plan_adherence": 35 if journal.get("plan") else 0,
+        "execution_discipline": 25 if journal.get("reflection") else 10,
+    }
     score = sum(dimensions.values())
-    hard_violation = any(order.get("rejection_reason") for order in state["orders"])
-    return {"session_id": session_id, "score": score, "passed": score >= 80 and not hard_violation and not state["session"].get("assisted", False), "assisted": state["session"].get("assisted", False), "dimensions": dimensions, "ai_review": {"available": False, "reason": "A review provider has not been configured."}}
+    profitable = D(state["account"].get("realized_pnl", 0)) > 0
+    hard_violation = any(order.get("rejection_reason") for order in state["orders"]) or (profitable and not has_stop) or (declared_risk is not None and not risk_within_plan)
+    evidence = [
+        {"rule": "stop_coverage", "passed": has_stop, "orders": [order["id"] for order in state["orders"] if order.get("stop_loss") or order.get("order_type") == "stop_market"]},
+        {"rule": "risk_sizing", "passed": risk_within_plan, "planned_risk": money(declared_risk) if declared_risk is not None else None, "maximum_risk": plan.get("maximum_risk")},
+        {"rule": "execution_discipline", "passed": not hard_violation, "fills": [fill["id"] for fill in entries], "rejections": [order["id"] for order in state["orders"] if order.get("rejection_reason")]},
+    ]
+    return {"session_id": session_id, "score": score, "passed": score >= 80 and not hard_violation and not state["session"].get("assisted", False), "assisted": state["session"].get("assisted", False), "dimensions": dimensions, "evidence": evidence, "ai_review": {"available": False, "reason": "A review provider has not been configured."}}
 
 
 @router.get("/drills")
@@ -692,6 +826,51 @@ def publish_drill(payload: DrillPublish, user: User = Depends(get_current_user),
     database.simulator_drills.insert_one(drill)
     drill.pop("_id", None)
     return drill
+
+
+@admin_router.post("/drills/drafts")
+def create_drill_draft(payload: DrillDraft, user: User = Depends(get_current_user), database=Depends(get_simulator_db)):
+    _require_admin(user)
+    dataset = get_dataset(payload.dataset_id)
+    if dataset["instrument_id"] != payload.instrument_id:
+        raise HTTPException(422, detail={"code": "DRILL_DATASET_MISMATCH", "message": "The drill instrument must match its pinned dataset."})
+    drill = {"id": f"drill_{uuid4().hex}", "version": database.simulator_drills.count_documents({"title": payload.title}) + 1, "state": "draft", **payload.model_dump(), "data_source": dataset["source"], "created_at": _now(), "created_by": user.id}
+    database.simulator_drills.insert_one(drill)
+    drill.pop("_id", None)
+    return drill
+
+
+@admin_router.post("/drills/{drill_id}/preview")
+def preview_drill(drill_id: str, user: User = Depends(get_current_user), database=Depends(get_simulator_db)):
+    _require_admin(user)
+    drill = database.simulator_drills.find_one_and_update({"id": drill_id, "state": "draft"}, {"$set": {"state": "preview", "previewed_at": _now(), "previewed_by": user.id}}, return_document=True)
+    if not drill:
+        raise HTTPException(409, detail={"code": "DRILL_NOT_PREVIEWABLE"})
+    drill.pop("_id", None)
+    return drill
+
+
+@admin_router.post("/drills/{drill_id}/publish")
+def publish_draft_drill(drill_id: str, user: User = Depends(get_current_user), database=Depends(get_simulator_db)):
+    _require_admin(user)
+    drill = database.simulator_drills.find_one({"id": drill_id, "state": {"$in": ["draft", "preview"]}}, {"_id": 0})
+    if not drill:
+        raise HTTPException(409, detail={"code": "DRILL_NOT_PUBLISHABLE"})
+    dataset = get_dataset(drill["dataset_id"])
+    if dataset["instrument_id"] != drill["instrument_id"]:
+        raise HTTPException(422, detail={"code": "DRILL_DATASET_MISMATCH"})
+    database.simulator_drills.update_one({"id": drill_id}, {"$set": {"state": "published", "published_at": _now(), "published_by": user.id}})
+    return database.simulator_drills.find_one({"id": drill_id}, {"_id": 0})
+
+
+@admin_router.post("/drills/{drill_id}/retire")
+def retire_drill(drill_id: str, payload: DrillRetire, user: User = Depends(get_current_user), database=Depends(get_simulator_db)):
+    _require_admin(user)
+    updated = database.simulator_drills.find_one_and_update({"id": drill_id, "state": "published"}, {"$set": {"state": "retired", "retired_at": _now(), "retired_by": user.id, "retired_reason": payload.reason}}, return_document=True)
+    if not updated:
+        raise HTTPException(409, detail={"code": "DRILL_NOT_RETIRABLE"})
+    updated.pop("_id", None)
+    return updated
 
 
 @router.websocket("/ws")

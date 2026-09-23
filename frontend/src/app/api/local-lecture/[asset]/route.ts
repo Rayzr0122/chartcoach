@@ -9,11 +9,11 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request, context: { params: Promise<{ asset: string }> }) {
   if (process.env.NODE_ENV !== "development") return new Response(null, { status: 404 });
   const { asset } = await context.params;
-  const files: Record<string, string> = { "video.mp4": "lecture.mp4", "captions.vtt": "lecture.srt", "poster.jpg": "poster.jpg" };
+  const files: Record<string, string> = { "video.mp4": "lecture.mp4", "captions.vtt": "lecture.srt", "captions.en.vtt": "lecture.en.srt", "poster.jpg": "poster.jpg" };
   if (!Object.hasOwn(files, asset)) return new Response(null, { status: 404 });
   const file = path.join(process.cwd(), ".local-media", files[asset]);
   try {
-    if (asset === "captions.vtt") {
+    if (asset.endsWith(".vtt")) {
       const srt = await readFile(file, "utf8");
       const vtt = "WEBVTT\n\n" + srt.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
       return new Response(vtt, { headers: { "Content-Type": "text/vtt; charset=utf-8", "Cache-Control": "no-store" } });

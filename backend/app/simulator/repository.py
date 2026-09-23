@@ -164,7 +164,11 @@ class MongoSimulatorRepository:
         self.db.simulator_accounts.create_index([("learner_id", 1), ("mode", 1), ("status", 1)])
         self.db.simulator_sessions.create_index("id", unique=True)
         self.db.simulator_idempotency.create_index([("session_id", 1), ("key", 1)], unique=True)
-        self.db.simulator_outbox.create_index([("session_id", 1), ("sequence", 1)], unique=True)
+        self.db.simulator_outbox.create_index(
+            [("session_id", 1), ("sequence", 1)],
+            unique=True,
+            partialFilterExpression={"sequence": {"$type": "number"}},
+        )
         for name in ("orders", "positions", "fills", "ledger"):
             self.db[f"simulator_{name}"].create_index("id", unique=True, sparse=True)
 

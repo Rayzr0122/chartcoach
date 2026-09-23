@@ -1,12 +1,13 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityPanel } from "@/components/simulator/ActivityPanel";
-import { MarketChart, type Overlay } from "@/components/simulator/MarketChart";
+import { MarketChart, type Overlay, type PriceLevel } from "@/components/simulator/MarketChart";
 import { OrderTicket } from "@/components/simulator/OrderTicket";
 import {
   formatInr,
   formatQuote,
   instrumentSupportsMode,
+  mergeCandles,
   sessionLabel,
   simulatorApi,
   simulatorErrorPresentation,
@@ -24,11 +25,12 @@ export default function TradePage() {
   const [instruments, setInstruments] = useState<Instrument[]>([]),
     [selected, setSelected] = useState("NASDAQ:AAPL"),
     [mode, setMode] = useState<"replay" | "delayed">("replay"),
-    [days, setDays] = useState<7 | 30 | 90 | 365>(30),
+    [days, setDays] = useState<7 | 30 | 90 | 365>(7),
+    [workspace, setWorkspace] = useState<"simple" | "pro">("simple"),
     [session, setSession] = useState<SimulatorSession | null>(null),
     [candles, setCandles] = useState<Candle[]>([]),
     [timeframe, setTimeframe] = useState<Timeframe>("1m"),
-    [overlays, setOverlays] = useState<Overlay[]>(["ema"]),
+    [overlays, setOverlays] = useState<Overlay[]>([]),
     [chartLayout, setChartLayout] = useState<ChartLayout>({ instrument_id: "", timeframe: "1m", revision: 0, drawings: [] }),
     [drawingTool, setDrawingTool] = useState<string>(),
     [journal, setJournal] = useState<Journal>({ plan: "", reflection: "" }),
@@ -40,6 +42,8 @@ export default function TradePage() {
     [streamRetry, setStreamRetry] = useState(0),
     [error, setError] = useState<unknown>();
   const controller = useRef(uid()),
+    commandInFlight = useRef(false),
+    firstWorkspaceWrite = useRef(true),
     eventCursor = useRef(0),
     instrument = useMemo(
       () =>
@@ -53,7 +57,19 @@ export default function TradePage() {
         ),
       [instruments, query],
     ),
+    priceLevels = useMemo<PriceLevel[]>(() => {
+      if (!session) return [];
+      const levels: PriceLevel[] = [];
+      const add = (id: string, value: string | undefined, kind: PriceLevel["kind"]) => { const number = Number(value); if (Number.isFinite(number)) levels.push({ id, value: number, kind }); };
+      session.orders.filter((order) => order.status === "open" && order.instrument_id === session.instrument_id).forEach((order) => { add(`${order.id}:limit`, order.limit_price, "order"); add(`${order.id}:stop`, order.stop_price || order.stop_loss, "stop"); add(`${order.id}:target`, order.take_profit, "target"); });
+      session.positions?.filter((position) => position.instrument_id === session.instrument_id && Number(position.quantity) !== 0).forEach((position) => add(`${position.instrument_id}:mark`, position.average_price || position.avg_price, "position"));
+      return levels;
+    }, [session]),
     last = candles.at(-1);
+  const sessionId = session?.id,
+    sessionInstrumentId = session?.instrument_id,
+    sessionState = session?.state,
+    sessionMode = session?.mode;
   const refresh = useCallback(
     async (id: string) => {
       const [s, c] = await Promise.all([
@@ -61,7 +77,7 @@ export default function TradePage() {
         simulatorApi.candles(id, { limit: 700, timeframe }),
       ]);
       setSession(s);
-      setCandles(c);
+      setCandles((current) => mergeCandles(current, c));
       return s;
     },
     [timeframe],
@@ -86,17 +102,24 @@ export default function TradePage() {
     eventCursor.current = 0;
   }, [session?.id]);
   useEffect(() => {
-    if (!session) return;
+    if (localStorage.getItem("chartcoach-practice-workspace") === "pro") setWorkspace("pro");
+  }, []);
+  useEffect(() => {
+    if (firstWorkspaceWrite.current) { firstWorkspaceWrite.current = false; return; }
+    localStorage.setItem("chartcoach-practice-workspace", workspace);
+  }, [workspace]);
+  useEffect(() => {
+    if (!sessionId) return;
     let closed = false;
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${protocol}//${location.hostname}:8000/api/v1/simulator/ws?session_id=${encodeURIComponent(session.id)}&cursor=${eventCursor.current}`);
+    const socket = new WebSocket(`${protocol}//${location.hostname}:8000/api/v1/simulator/ws?session_id=${encodeURIComponent(sessionId)}&cursor=${eventCursor.current}`);
     socket.onmessage = (message) => {
       try {
         const update = JSON.parse(message.data) as { cursor?: number; payload?: SimulatorSession };
         if (!update.payload) return;
         if (typeof update.cursor === "number") eventCursor.current = update.cursor;
         setSession(update.payload);
-        void simulatorApi.candles(update.payload.id, { limit: 700, timeframe }).then(setCandles).catch(setError);
+        void simulatorApi.candles(update.payload.id, { limit: 700, timeframe }).then((next) => { if (!closed) setCandles((current) => mergeCandles(current, next)); }).catch((error) => { if (!closed) setError(error); });
       } catch {
         setError(new Error("The simulator event stream returned an invalid update."));
       }
@@ -108,11 +131,18 @@ export default function TradePage() {
       closed = true;
       socket.close();
     };
-  }, [session?.id, timeframe, streamRetry]);
+  }, [sessionId, timeframe, streamRetry]);
   useEffect(() => {
-    if (!session) return;
-    simulatorApi.chartLayout(session.instrument_id, timeframe).then(setChartLayout).catch(setError);
-  }, [session?.id, session?.instrument_id, timeframe]);
+    if (!sessionId) return;
+    let cancelled = false;
+    setCandles([]);
+    void simulatorApi.candles(sessionId, { limit: 700, timeframe }).then((page) => { if (!cancelled) setCandles(page); }).catch((error) => { if (!cancelled) setError(error); });
+    return () => { cancelled = true; };
+  }, [sessionId, timeframe]);
+  useEffect(() => {
+    if (!sessionInstrumentId) return;
+    simulatorApi.chartLayout(sessionInstrumentId, timeframe).then(setChartLayout).catch(setError);
+  }, [sessionInstrumentId, timeframe]);
   const saveDrawings = useCallback((drawings: Array<Record<string, unknown>>) => {
     if (!session) return;
     const next = { ...chartLayout, drawings };
@@ -120,13 +150,13 @@ export default function TradePage() {
     void simulatorApi.saveChartLayout(session.instrument_id, timeframe, next).then(setChartLayout).catch(setError);
   }, [session, timeframe, chartLayout]);
   useEffect(() => {
-    if (!session || session.state !== "playing" || session.mode !== "replay")
+    if (!sessionId || sessionState !== "playing" || sessionMode !== "replay")
       return;
     const timer = setInterval(
       () =>
         simulatorApi
           .control(
-            session.id,
+            sessionId,
             "heartbeat",
             uid(),
             undefined,
@@ -136,7 +166,7 @@ export default function TradePage() {
       5000,
     );
     return () => clearInterval(timer);
-  }, [session?.id, session?.state, session?.mode]);
+  }, [sessionId, sessionState, sessionMode]);
   async function start() {
     setPending(true);
     setError(undefined);
@@ -155,7 +185,8 @@ export default function TradePage() {
     }
   }
   async function mutate(job: () => Promise<unknown>) {
-    if (!session || pending) return;
+    if (!session || pending || commandInFlight.current) return;
+    commandInFlight.current = true;
     setPending(true);
     setError(undefined);
     try {
@@ -164,6 +195,7 @@ export default function TradePage() {
     } catch (e) {
       setError(e);
     } finally {
+      commandInFlight.current = false;
       setPending(false);
     }
   }
@@ -194,116 +226,43 @@ export default function TradePage() {
       setPending(false);
     }
   }
-  const older = useCallback(async () => {
-    if (!session || !candles.length) return;
-    try {
-      const c = await simulatorApi.candles(session.id, {
-        before: candles[0].time,
-        limit: 700,
-        timeframe,
-      });
-      if (c.length) setCandles((v) => [...c, ...v]);
-    } catch (e) {
-      setError(e);
-    }
-  }, [session, candles, timeframe]);
+  const older = useCallback(async (before: number) => {
+    if (!sessionId) return [];
+    return simulatorApi.candles(sessionId, { before, limit: 700, timeframe });
+  }, [sessionId, timeframe]);
   if (loading)
     return (
-      <main className="loading">
+      <main className="trade-page loading">
         <b>CC</b>
         <p>Connecting to the practice exchange…</p>
       </main>
     );
   if (!session)
     return (
-      <main className="launch">
-        <header>
-          <b>
-            CHARTCOACH <span>/ Practice Exchange</span>
-          </b>
-          <small>● Simulator online</small>
+      <main className="trade-page launch">
+        <header className="launch-header">
+          <div className="brand-lockup"><b>ChartCoach</b><span>Practice</span></div>
+          <div className="experience-toggle" aria-label="Workspace mode">
+            <button className={workspace === "simple" ? "active" : ""} onClick={() => { setWorkspace("simple"); setMode("replay"); }}>Simple</button>
+            <button className={workspace === "pro" ? "active" : ""} onClick={() => setWorkspace("pro")}>Pro</button>
+          </div>
         </header>
         <div className="launch-grid">
-          <section>
-            <label>SERVER-AUTHORITATIVE PAPER TRADING</label>
-            <h1>
-              Train the decision.
-              <br />
-              <em>Not the outcome.</em>
-            </h1>
-            <p>
-              Replay up to one year of minute-level history or use a persistent
-              15-minute delayed market clock. Every fill, cost and risk decision
-              is recorded.
-            </p>
-            <div className="stats">
-              <b>
-                ₹10L<small>virtual capital</small>
-              </b>
-              <b>
-                40<small>instruments</small>
-              </b>
-              <b>
-                1m<small>execution precision</small>
-              </b>
-            </div>
+          <section className="launch-copy">
+            <p className="eyebrow">Paper trading for deliberate practice</p>
+            <h1>Learn the process.<br /><em>Keep the pressure virtual.</em></h1>
+            <p>Start with a focused replay, place an order, and see the position change as the market moves. The simple workspace keeps the chart, replay controls, and order form in one clear view.</p>
+            <ul className="launch-points"><li>₹10,00,000 virtual starting balance</li><li>Market orders and positions are recorded in your session</li><li>Pro mode adds indicators, drawings, and advanced orders</li></ul>
           </section>
           <section className="builder">
             <div className="modes">
-              <button
-                className={mode === "replay" ? "on" : ""}
-                onClick={() => setMode("replay")}
-              >
-                Historical replay<small>Control the clock</small>
-              </button>
-              <button
-                className={mode === "delayed" ? "on" : ""}
-                disabled={!instrumentSupportsMode(instrument || {}, "delayed")}
-                onClick={() => setMode("delayed")}
-              >
-                Delayed paper<small>Persistent account</small>
-              </button>
+              <button className={mode === "replay" ? "on" : ""} onClick={() => setMode("replay")}>Replay practice<small>Control the clock</small></button>
+              <button className={mode === "delayed" ? "on" : ""} disabled={!instrumentSupportsMode(instrument || {}, "delayed")} onClick={() => setMode("delayed")}>Live practice<small>{instrumentSupportsMode(instrument || {}, "delayed") ? "Approved market route" : "Data route unavailable"}</small></button>
             </div>
-            <label>
-              Instrument
-              <select
-                value={selected}
-                onChange={(e) => {
-                  const next = instruments.find((item) => item.id === e.target.value);
-                  setSelected(e.target.value);
-                  if (mode === "delayed" && next && !instrumentSupportsMode(next, mode)) setMode("replay");
-                }}
-              >
-                {instruments.map((x) => (
-                  <option key={x.id} value={x.id}>
-                    {x.symbol} · {x.venue} · {x.asset_class}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="row">
-              <label>
-                History
-                <select
-                  value={days}
-                  onChange={(e) =>
-                    setDays(Number(e.target.value) as typeof days)
-                  }
-                >
-                  {[7, 30, 90, 365].map((x) => (
-                    <option key={x} value={x}>
-                      {x === 365 ? "1 year" : `${x} days`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <p className="note">
-              ● {instrument?.data_status === "synthetic_test" ? "Labeled educational fixture data" : "Server-approved market-data route required"}
-            </p>
-            <button className="open" disabled={pending} onClick={start}>
-              {pending ? "Preparing market data…" : "Open trading workspace →"}
-            </button>
+            <label>Instrument<select value={selected} onChange={(e) => { const next = instruments.find((item) => item.id === e.target.value); setSelected(e.target.value); if (mode === "delayed" && next && !instrumentSupportsMode(next, mode)) setMode("replay"); }}>{instruments.map((x) => <option key={x.id} value={x.id}>{x.symbol} · {x.venue} · {x.asset_class}</option>)}</select></label>
+            <div className="row"><label>Practice length<select value={days} onChange={(e) => setDays(Number(e.target.value) as typeof days)}>{[7, 30, 90, 365].map((x) => <option key={x} value={x}>{x === 365 ? "1 year" : `${x} days`}</option>)}</select></label></div>
+            <p className="note">{mode === "replay" ? "Replay is ready for paper trading. The workspace labels the exact data source before you place an order." : "Live paper orders use the approved quote and trade feed."}</p>
+            <button className="open" disabled={pending} onClick={start}>{pending ? `Preparing ${mode === "delayed" ? "live" : "replay"} practice…` : `Start ${mode === "delayed" ? "live" : "replay"} practice`}</button>
           </section>
         </div>
         {Boolean(error) && <Toast error={error} close={() => setError(undefined)} />}
@@ -316,16 +275,16 @@ export default function TradePage() {
       })
     : "Waiting for market";
   return (
-    <main className="terminal">
+    <main className="trade-page terminal" data-workspace={workspace}>
       <header className="top">
-        <b className="logo">CC</b>
-        <div>
+        <div className="brand-lockup"><b className="logo">CC</b><span>Practice</span></div>
+        <div className="instrument-summary">
           <strong>{instrument?.symbol}</strong>
           <small>
             {instrument?.venue} · {instrument?.asset_class}
           </small>
         </div>
-        <div>
+        <div className="price-summary">
           <strong>
             {last
               ? formatQuote(last.close, instrument?.quote_currency || "USD")
@@ -333,18 +292,14 @@ export default function TradePage() {
           </strong>
           <small>{date}</small>
         </div>
-        <span className="feed">
-          ●{" "}
-          {sessionLabel(session.mode, session.data_source || "synthetic-test")}
-        </span>
-        <button
-          onClick={() => {
-            setSession(null);
-            history.replaceState(null, "", "/trade");
-          }}
-        >
-          Exit
-        </button>
+        <span className={`feed ${session.data_status === "synthetic_test" ? "fixture" : ""}`}>● {sessionLabel(session.mode, session.data_source || "synthetic-test")}</span>
+        <div className="top-actions">
+          <div className="experience-toggle" aria-label="Workspace mode">
+            <button className={workspace === "simple" ? "active" : ""} onClick={() => setWorkspace("simple")}>Simple</button>
+            <button className={workspace === "pro" ? "active" : ""} onClick={() => setWorkspace("pro")}>Pro</button>
+          </div>
+          <button className="exit" onClick={() => { setSession(null); setWorkspace("simple"); setMode("replay"); history.replaceState(null, "", "/trade"); }}>New practice</button>
+        </div>
       </header>
       <div className="metrics">
         <Metric n="Equity" v={session.account.equity} />
@@ -352,12 +307,11 @@ export default function TradePage() {
           n="Available"
           v={session.account.buying_power || session.account.cash}
         />
-        <Metric n="Reserved" v={session.account.reserved || "0"} />
         <Metric n="Realized P&L" v={session.account.realized_pnl || "0"} />
-        <Metric n="Unrealized P&L" v={session.account.unrealized_pnl || "0"} />
+        {workspace === "pro" && <><Metric n="Reserved" v={session.account.reserved || "0"} /><Metric n="Unrealized P&L" v={session.account.unrealized_pnl || "0"} /></>}
       </div>
       <div className="body">
-        <aside className="watch">
+        {workspace === "pro" && <aside className="watch">
           <h3>
             WATCHLIST <small>{filtered.length}</small>
           </h3>
@@ -370,7 +324,9 @@ export default function TradePage() {
             <button
               key={x.id}
               className={x.id === session.instrument_id ? "on" : ""}
-              disabled={x.id !== session.instrument_id}
+              disabled={pending || x.id === session.instrument_id}
+              title={x.id === session.instrument_id ? "Current instrument" : `Set up practice for ${x.symbol}`}
+              onClick={() => { setSelected(x.id); setSession(null); history.replaceState(null, "", "/trade"); }}
             >
               <b>
                 {x.symbol}
@@ -379,13 +335,14 @@ export default function TradePage() {
               <span>{x.quote_currency}</span>
             </button>
           ))}
-        </aside>
+        </aside>}
         <section className="work">
-          <nav className="tools">
-            <div>
+          <nav className="tools" aria-label="Chart tools">
+            <div role="group" aria-label="Timeframe">
               {(["1m", "5m", "15m", "1h", "1d"] as Timeframe[]).map((x) => (
                 <button
                   className={x === timeframe ? "on" : ""}
+                  aria-pressed={x === timeframe}
                   key={x}
                   onClick={() => setTimeframe(x)}
                 >
@@ -393,10 +350,11 @@ export default function TradePage() {
                 </button>
               ))}
             </div>
-            <div>
-              {(["sma", "ema", "vwap"] as Overlay[]).map((x) => (
+            {workspace === "pro" && <div>
+              {(["sma", "ema", "vwap", "rsi", "macd"] as Overlay[]).map((x) => (
                 <button
                   className={overlays.includes(x) ? "on" : ""}
+                  aria-pressed={overlays.includes(x)}
                   key={x}
                   onClick={() =>
                     setOverlays((v) =>
@@ -407,20 +365,25 @@ export default function TradePage() {
                   {x.toUpperCase()}
                 </button>
               ))}
-            </div>
-            <div>
+            </div>}
+            {workspace === "pro" && <div>
               {[ ["horizontalStraightLine", "Line"], ["segment", "Trend"], ["fibonacciLine", "Fib"] ].map(([tool, label]) => <button key={tool} onClick={() => setDrawingTool(`${tool}#${uid()}`)}>{label}</button>)}
-            </div>
+            </div>}
             <small>{candles.length} bars</small>
           </nav>
           <div className="chart">
             {candles.length ? (
               <MarketChart
+                key={`${session.id}:${timeframe}`}
                 candles={candles}
-                overlays={overlays}
-                drawings={chartLayout.drawings as Array<{ name: string; points: Array<{ timestamp?: number; value?: number }> }>}
-                drawingTool={drawingTool}
-                onDrawingsChange={saveDrawings}
+                overlays={workspace === "pro" ? overlays : []}
+                symbol={instrument?.symbol || "SIM"}
+                timeframe={timeframe}
+                showVolume={workspace === "pro"}
+                priceLevels={priceLevels}
+                drawings={workspace === "pro" ? chartLayout.drawings as Array<{ name: string; points: Array<{ timestamp?: number; value?: number }> }> : []}
+                drawingTool={workspace === "pro" ? drawingTool : undefined}
+                onDrawingsChange={workspace === "pro" ? saveDrawings : undefined}
                 onLoadOlder={older}
               />
             ) : (
@@ -430,14 +393,17 @@ export default function TradePage() {
           {session.mode === "replay" && (
             <div className="controls">
               <button
+                disabled={pending || session.state === "playing" || session.state === "finished"}
+                title="Advance one candle while replay is paused"
                 onClick={() =>
                   mutate(() => simulatorApi.control(session.id, "step", uid()))
                 }
               >
-                │▶ Step
+                Next candle
               </button>
               <button
                 className="play"
+                disabled={pending || session.state === "finished"}
                 onClick={() =>
                   mutate(() =>
                     simulatorApi.control(
@@ -448,11 +414,14 @@ export default function TradePage() {
                   )
                 }
               >
-                {session.state === "playing" ? "❚❚ Pause" : "▶ Play"}
+                {session.state === "playing" ? "Pause replay" : "Play replay"}
               </button>
               {[5, 10, 20, 30].map((x) => (
                 <button
                   className={session.speed === x ? "on" : ""}
+                  aria-pressed={session.speed === x}
+                  title={`Replay speed: ${x} times`}
+                  disabled={pending}
                   key={x}
                   onClick={() =>
                     mutate(() =>
@@ -533,24 +502,29 @@ export default function TradePage() {
             onReview={() =>
               simulatorApi.review(session.id).then(setReview).catch(setError)
             }
+            simple={workspace === "simple"}
           />
         </section>
         <aside className="rail">
           <h3>
-            ORDER ENTRY <small>{instrument?.symbol}</small>
+            {workspace === "simple" ? "Place a practice order" : "Order entry"} <small>{instrument?.symbol}</small>
           </h3>
           <OrderTicket
             instrumentId={session.instrument_id}
             quoteCurrency={instrument?.quote_currency || "USD"}
             pending={pending}
+            simple={workspace === "simple"}
+            live={session.mode === "stream"}
+            shortable={Boolean(instrument?.shortable)}
+            referencePrice={last?.close}
             onSubmit={(p) =>
               mutate(() => simulatorApi.order(session.id, p, uid()))
             }
           />
           <div className="risk">
-            <b>Educational cash preset</b>
+            <b>{session.account.margin_state === "liquidated" ? "Margin restriction" : workspace === "simple" ? "Practice account" : "Educational execution profile"}</b>
             <p>
-              Long-only · 5 bps commission/spread · 2 bps slippage · 5 bps FX
+              {session.account.margin_state === "liquidated" ? "New exposure is blocked after liquidation. Start a new practice session to reset the account." : instrument?.shortable ? `Long, close, short, and cover are available. Initial margin ${Number(instrument.initial_margin_rate || 0) * 100}% · maintenance ${Number(instrument.maintenance_margin_rate || 0) * 100}%.` : "Long-only paper trading. Your fill and position update as the market moves."}
             </p>
           </div>
         </aside>
@@ -578,7 +552,10 @@ function Toast({ error, close }: { error: unknown; close: () => void }) {
         <b>{e.title}</b>
         <p>{e.message}</p>
       </div>
-      <button onClick={close}>×</button>
+      <div className="toast-actions">
+        {e.actionHref ? <a href={e.actionHref}>{e.actionLabel}</a> : e.actionLabel ? <button className="retry" onClick={() => location.reload()}>{e.actionLabel}</button> : null}
+        <button aria-label="Dismiss message" onClick={close}>×</button>
+      </div>
     </div>
   );
 }

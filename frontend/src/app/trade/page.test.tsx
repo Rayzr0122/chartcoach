@@ -16,7 +16,7 @@ const session = {
 };
 
 describe("TradePage replay controls", () => {
-  afterEach(() => { cleanup(); vi.restoreAllMocks(); history.replaceState(null, "", "/"); });
+  afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); history.replaceState(null, "", "/"); });
 
   it("offers the requested replay speeds and a seekable timeline", async () => {
     history.replaceState(null, "", "/trade?session=sim-1");
@@ -34,6 +34,54 @@ describe("TradePage replay controls", () => {
     expect(screen.getByRole("button", { name: "30×" })).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Replay position" })).toHaveAttribute("min", "300");
     expect(screen.getByRole("slider", { name: "Replay position" })).toHaveAttribute("max", "420");
+  });
+
+  it("keeps a restored live session in the learner's simple workspace by default", async () => {
+    history.replaceState(null, "", "/trade?session=sim-live");
+    vi.spyOn(simulatorApi, "instruments").mockResolvedValue([{ id: "NASDAQ:AAPL", symbol: "AAPL", venue: "NASDAQ", asset_class: "stock", quote_currency: "USD", source: "alpaca_iex", supported_modes: ["replay", "stream"] }]);
+    vi.spyOn(simulatorApi, "bootstrap").mockResolvedValue({ equity: "1000000", account_id: "account-1", modes: ["replay", "delayed"] });
+    vi.spyOn(simulatorApi, "capabilities").mockResolvedValue([]);
+    vi.spyOn(simulatorApi, "getSession").mockResolvedValue({ ...session, id: "sim-live", mode: "stream", data_source: "alpaca_iex" });
+    vi.spyOn(simulatorApi, "candles").mockResolvedValue([]);
+    vi.spyOn(simulatorApi, "getJournal").mockResolvedValue({ plan: "", reflection: "" });
+
+    render(<TradePage />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Simple" })).toHaveClass("active"));
+  });
+
+  it("opens in simple practice and shows whether a live route is available", async () => {
+    vi.spyOn(simulatorApi, "instruments").mockResolvedValue([{ id: "NASDAQ:AAPL", symbol: "AAPL", venue: "NASDAQ", asset_class: "stock", quote_currency: "USD", source: "polygon" }]);
+    vi.spyOn(simulatorApi, "bootstrap").mockResolvedValue({ equity: "1000000", account_id: "account-1", modes: ["replay"] });
+    vi.spyOn(simulatorApi, "capabilities").mockResolvedValue([]);
+
+    render(<TradePage />);
+
+    await screen.findByRole("button", { name: "Start replay practice" });
+    expect(screen.getByRole("button", { name: "Simple" })).toHaveClass("active");
+    expect(screen.getByRole("button", { name: /Live practice/ })).toBeDisabled();
+  });
+
+  it("explains the approved live route after a learner selects it", async () => {
+    vi.spyOn(simulatorApi, "instruments").mockResolvedValue([{ id: "NASDAQ:AAPL", symbol: "AAPL", venue: "NASDAQ", asset_class: "stock", quote_currency: "USD", source: "alpaca_iex", supported_modes: ["replay", "stream"] }]);
+    vi.spyOn(simulatorApi, "bootstrap").mockResolvedValue({ equity: "1000000", account_id: "account-1", modes: ["replay", "delayed"] });
+    vi.spyOn(simulatorApi, "capabilities").mockResolvedValue([]);
+
+    render(<TradePage />);
+
+    await screen.findByRole("button", { name: "Start replay practice" });
+    fireEvent.click(screen.getByRole("button", { name: /Live practice/ }));
+    expect(screen.getByText("Live paper orders use the approved quote and trade feed." )).toBeInTheDocument();
+  });
+
+  it("offers the appropriate recovery action when practice access needs sign-in", async () => {
+    vi.spyOn(simulatorApi, "instruments").mockResolvedValue([]);
+    vi.spyOn(simulatorApi, "bootstrap").mockRejectedValue(Object.assign(new Error("Sign in"), { status: 401, code: "UNAUTHORIZED" }));
+    vi.spyOn(simulatorApi, "capabilities").mockResolvedValue([]);
+
+    render(<TradePage />);
+
+    expect(await screen.findByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login?next=%2Ftrade");
   });
 
   it("seeks to the selected bar and switches to a returned fork", async () => {

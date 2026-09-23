@@ -4,12 +4,13 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import uuid4
 
 import redis.asyncio as redis
 import websockets
 
-from app.api.simulator import advance_state
+from app.api.simulator import EXECUTION_PROFILES, _instruments, advance_state
 from app.config import settings
 from app.simulator.database import get_simulator_db
 from app.simulator.engine import process_quote_trade
@@ -17,9 +18,19 @@ from app.simulator.event_stream import MARKET_EVENTS_STREAM, decode_event, publi
 from app.simulator.market_data import MarketDataError
 from app.simulator.provider_streams import stream_alpaca, stream_coinbase
 from app.simulator.repository import MongoSimulatorRepository
+from app.services.simulator_data import DatasetError, get_dataset
 
 
 OUTBOX_STREAM = "simulator:outbox"
+
+
+def _stream_fx_rate(session: dict, event_time: int) -> Decimal:
+    dataset_id = session.get("fx_dataset_id")
+    if not dataset_id:
+        return Decimal("1")
+    bars = get_dataset(dataset_id)["bars"]
+    visible = [bar for bar in bars if bar["time"] <= event_time]
+    return Decimal(str((visible or bars)[-1]["close"]))
 
 
 def _parse(value: str | None) -> datetime | None:
@@ -37,6 +48,8 @@ def advance_sessions(repo, now: datetime | None = None) -> int:
     for listed in repo.list_active_sessions():
         state = repo.snapshot(listed["id"])
         session = state["session"]
+        if session["mode"] == "stream":
+            continue
         if session["mode"] == "replay":
             heartbeat = _parse(session.get("controller_heartbeat_at"))
             if session["state"] != "playing":
@@ -61,7 +74,25 @@ def advance_sessions(repo, now: datetime | None = None) -> int:
             event = {"id": f"evt_{uuid4().hex}", "type": "clock.advanced", "created_at": now.isoformat(), "clock": updated["clock"]}
             return {"clock": updated["clock"]}, {"session": updated, "account": account, "positions": positions, "orders": orders, "fills": fills, "ledger": ledger, "events": [event]}
 
-        repo.mutate(session["id"], f"worker:clock:{session['clock']}", f"advance:{count}", advance)
+        try:
+            repo.mutate(session["id"], f"worker:clock:{session['clock']}", f"advance:{count}", advance)
+        except DatasetError as error:
+            def pause_missing_dataset(current):
+                updated = {
+                    **current["session"],
+                    "state": "paused",
+                    "data_status": "dataset_unavailable",
+                    "unavailable_reason": error.code,
+                }
+                event = {
+                    "id": f"evt_{uuid4().hex}",
+                    "type": "session.data_unavailable",
+                    "reason": error.code,
+                    "created_at": now.isoformat(),
+                }
+                return {"state": "paused", "reason": error.code}, {"session": updated, "events": [event]}
+
+            repo.mutate(session["id"], f"worker:dataset:{session['revision']}", error.code, pause_missing_dataset)
         changed += 1
     return changed
 
@@ -70,6 +101,9 @@ def process_market_event(repo, event) -> int:
     """Apply one provider event to matching live sessions exactly once."""
 
     changed = 0
+    instrument = next((item for item in _instruments() if item["id"] == event.instrument_id), None)
+    if not instrument:
+        return changed
     for listed in repo.list_active_sessions():
         if listed.get("mode") != "stream" or listed.get("state") != "playing" or listed.get("instrument_id") != event.instrument_id:
             continue
@@ -79,7 +113,18 @@ def process_market_event(repo, event) -> int:
 
         def execute(current):
             session = {**current["session"], "market_time": event.exchange_time, "last_source_event_id": event.event_id, "clock": current["session"].get("clock", 0) + 1}
-            result = process_quote_trade(current["account"], current["positions"], current["orders"], event, session["clock"])
+            profile = EXECUTION_PROFILES[session.get("profile_version", "cash_equity_dev_v1")]
+            fx_rate = _stream_fx_rate(session, event.exchange_time)
+            result = process_quote_trade(
+                current["account"], current["positions"], current["orders"], event, session["clock"],
+                fee_bps=profile["fee_bps"], fx_rate=fx_rate,
+                fx_cost_bps=Decimal("5") if session.get("fx_dataset_id") else Decimal("0"),
+                slippage_bps=profile["slippage_bps"], shortable=instrument["shortable"],
+                initial_margin_rate=Decimal(instrument["initial_margin_rate"] or "1"),
+                maintenance_margin_rate=Decimal(instrument["maintenance_margin_rate"] or "1"),
+                borrow_rate_bps=Decimal(instrument["borrow_rate_bps"]),
+                leveraged=instrument["asset_class"] == "forex", margin_for_longs=instrument["asset_class"] == "forex",
+            )
             emitted = {"id": f"evt_{uuid4().hex}", "type": "market.event_applied", "source_event_id": event.event_id, "created_at": datetime.now(timezone.utc).isoformat()}
             return {"market_time": session["market_time"]}, {"session": session, "account": result.account, "positions": result.positions, "orders": result.orders, "fills": result.fills, "ledger": result.ledger, "events": [emitted]}
 

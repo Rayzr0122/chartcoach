@@ -11,7 +11,8 @@ from app.simulator.market_data import (
 from app.config import settings
 
 
-def test_registry_exposes_provider_neutral_capabilities_without_enabling_unapproved_routes():
+def test_registry_exposes_provider_neutral_capabilities_without_enabling_unapproved_routes(monkeypatch):
+    monkeypatch.setattr(settings, "simulator_alpaca_usage_rights_record_id", "")
     registry = ProviderRegistry.default()
 
     capabilities = registry.capabilities("development")

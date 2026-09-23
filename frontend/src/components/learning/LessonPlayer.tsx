@@ -1,7 +1,7 @@
 "use client";
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import LessonTranscript from "./LessonTranscript";
+import LessonTranscript, { type TranscriptTrack } from "./LessonTranscript";
 import LessonChat from "./LessonChat";
 import LessonTour from "./LessonTour";
 import * as learningApi from "@/lib/learning-api";
@@ -31,6 +31,7 @@ type Props = {
   onRetry?: () => void;
   previewMode?: boolean;
   tourStorageKey?: string;
+  transcriptTracks?: TranscriptTrack[];
 };
 export default function LessonPlayer({
   lesson,
@@ -41,6 +42,7 @@ export default function LessonPlayer({
   onRetry,
   previewMode = false,
   tourStorageKey,
+  transcriptTracks,
 }: Props) {
   const video = useRef<HTMLVideoElement>(null),
     playerSurface = useRef<HTMLDivElement>(null),
@@ -357,7 +359,7 @@ export default function LessonPlayer({
           </div>
         )}
       </div>
-      <LessonTranscript key={lesson.id} url={lesson.captions.url} duration={lesson.duration_seconds} position={position} language={lesson.captions.label} onSeek={seekTo} disabled={modalOpen || !view?.ready} />
+      <LessonTranscript key={lesson.id} url={lesson.captions.url} duration={lesson.duration_seconds} position={position} language={lesson.captions.label} onSeek={seekTo} disabled={modalOpen || !view?.ready} tracks={transcriptTracks} />
       </div>
       <div className={styles.studySidebar} inert={modalOpen}>
       <LessonChat key={lesson.id} lessonId={lesson.id} position={position} onSeek={seekTo} />

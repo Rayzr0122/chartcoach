@@ -246,10 +246,16 @@ def _synthetic(instrument_id: str, history_days: int) -> dict:
     end = 1_735_680_000  # fixed fixture anchor: 2025-01-01 00:00:00 UTC
     start = end - history_days * 86400
     bars = []
+    seed = int(hashlib.sha256(instrument_id.encode()).hexdigest()[:8], 16)
+    price = Decimal("100") + Decimal(seed % 1000) / Decimal("100")
     for index, timestamp in enumerate(range(start, end, 60)):
-        base = Decimal("100.00") + Decimal(index % 37) / Decimal("10")
-        close = base + Decimal("0.05")
-        bars.append({"time": timestamp, "open": format(base, "f"), "high": format(close + Decimal("0.10"), "f"), "low": format(base - Decimal("0.10"), "f"), "close": format(close, "f"), "volume": format(Decimal(1000 + index % 100), "f")})
+        seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+        open_price = price
+        change = Decimal(seed % 2001 - 1000) / Decimal("10000")
+        close = max(Decimal("0.01"), open_price + change)
+        wick = Decimal((seed // 2001) % 50 + 1) / Decimal("1000")
+        bars.append({"time": timestamp, "open": format(open_price, ".4f"), "high": format(max(open_price, close) + wick, ".4f"), "low": format(min(open_price, close) - wick, ".4f"), "close": format(close, ".4f"), "volume": format(Decimal(900 + seed % 2101), "f")})
+        price = close
     return {"source": "synthetic-test", "instrument_id": instrument_id, "bars": bars, "precision": "1m", "start": start, "end": end - 60, "coverage": {"requested_start": start, "requested_end": end - 60, "actual_start": start, "actual_end": end - 60, "cutoff_timestamp": end, "test_only": True}}
 
 
@@ -268,6 +274,19 @@ def _instrument_parts(instrument_id: str, source: str) -> tuple[str, str, bool]:
     if source in {"polygon", "alpaca_iex"} and venue not in SUPPORTED_POLYGON_VENUES:
         raise DatasetError("UNSUPPORTED_VENUE", "Polygon does not support this instrument venue")
     return canonical, symbol, False
+
+
+def _dataset_metadata(instrument_id: str, source: str) -> dict:
+    venue = instrument_id.split(":", 1)[0] if ":" in instrument_id else "SIM"
+    calendar, timezone = {
+        "NSE": ("XNSE", "Asia/Kolkata"), "BSE": ("XBOM", "Asia/Kolkata"),
+        "NASDAQ": ("XNAS", "America/New_York"), "NYSE": ("XNYS", "America/New_York"),
+        "CRYPTO": ("CRYPTO_24_7", "UTC"), "FX": ("FX_24_5", "UTC"),
+    }.get(venue, ("SIM", "UTC"))
+    return {
+        "calendar": calendar, "timezone": timezone,
+        "adjustment_policy": "unadjusted_fixture" if source == "synthetic-test" else "provider_reported",
+    }
 
 
 def _polygon_path(instrument_id: str, start: int, end: int) -> str:
@@ -479,7 +498,7 @@ async def load_dataset(instrument_id: str, source: str, history_days: int = 30) 
         "alpha_vantage": settings.simulator_alpha_vantage_usage_rights_record_id,
         "coinbase": settings.simulator_coinbase_usage_rights_record_id,
     }
-    return _store({**dataset, "import_tool_version": 2, "source_approval_id": approvals.get(source) or None, "corrections": []})
+    return _store({**dataset, **_dataset_metadata(canonical_id, source), "import_tool_version": 3, "source_approval_id": approvals.get(source) or None, "corrections": []})
 
 
 async def refresh_dataset(instrument_id: str, source: str, history_days: int = 30) -> dict:

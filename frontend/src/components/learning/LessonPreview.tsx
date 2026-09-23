@@ -57,7 +57,10 @@ export default function LessonPreview() {
     <div className="mx-auto max-w-7xl">
       <p className="mb-5 text-sm text-slate-600">Local lecture preview · Hindi auto-generated captions · Progress lasts for this page session · DRM not enabled</p>
       <h1 className="mb-6 text-2xl font-semibold tracking-tight">{lesson.title}</h1>
-      <LessonPlayer key={retry} lesson={lesson} authorization={authorization} api={state.api} factory={createLocalPlayerAdapter} onUnauthorized={onUnauthorized} onRetry={() => setRetry((value) => value + 1)} tourStorageKey="chartcoach-lesson-tour-preview" />
+      <LessonPlayer key={retry} lesson={lesson} authorization={authorization} api={state.api} factory={createLocalPlayerAdapter} onUnauthorized={onUnauthorized} onRetry={() => setRetry((value) => value + 1)} tourStorageKey="chartcoach-lesson-tour-preview" transcriptTracks={[
+        { language: "hi", label: "हिन्दी", url: "/api/local-lecture/captions.vtt" },
+        { language: "en", label: "English", url: "/api/local-lecture/captions.en.vtt" },
+      ]} />
     </div>
   </main>;
 }

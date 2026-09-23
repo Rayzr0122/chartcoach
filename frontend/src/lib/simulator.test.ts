@@ -9,6 +9,7 @@ import {
   createLatestRequestGuard,
   formatInr,
   instrumentSupportsMode,
+  mergeCandles,
   sessionLabel,
   simulatorErrorPresentation,
   SimulatorApiError,
@@ -69,6 +70,10 @@ describe("terminal market calculations", () => {
       { time: 0, open: "10", high: "15", low: "9", close: "14", volume: "60" },
       { time: 300, open: "20", high: "22", low: "19", close: "21", volume: "40" },
     ]);
+  });
+
+  it("merges history pages and live updates by timestamp without duplicating bars", () => {
+    expect(mergeCandles([{ ...candles[1], close: "12" }, candles[2]], [candles[0], { ...candles[1], close: "13" }])).toEqual([candles[0], { ...candles[1], close: "13" }, candles[2]]);
   });
 
   it("calculates SMA, EMA and cumulative VWAP from real candle values", () => {

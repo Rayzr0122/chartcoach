@@ -21,23 +21,17 @@ function Start-LocalProcess {
     $startInfo.Arguments = [string]::Join(" ", ($Arguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }))
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
+    # PowerShell event callbacks have no runspace in this launcher. Avoid
+    # redirected-pipe callbacks so child processes start reliably on Windows.
+    $startInfo.RedirectStandardOutput = $false
+    $startInfo.RedirectStandardError = $false
     $startInfo.RedirectStandardInput = $false
     foreach ($key in $Environment.Keys) {
         $startInfo.EnvironmentVariables[$key] = [string]$Environment[$key]
     }
-    $outputFile = $StandardOutputPath
-    $errorFile = $StandardErrorPath
-    $outputHandler = { param($sender, $event) if ($null -ne $event.Data) { Add-Content -LiteralPath $outputFile -Value $event.Data } }.GetNewClosure()
-    $errorHandler = { param($sender, $event) if ($null -ne $event.Data) { Add-Content -LiteralPath $errorFile -Value $event.Data } }.GetNewClosure()
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $startInfo
     if (-not $process.Start()) { throw "Unable to start $FilePath." }
-    $process.add_OutputDataReceived($outputHandler)
-    $process.add_ErrorDataReceived($errorHandler)
-    $process.BeginOutputReadLine()
-    $process.BeginErrorReadLine()
     return $process
 }
 
